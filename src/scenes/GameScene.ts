@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
-import { drawActor, type ActorKind } from '../render/actors';
+import { PLAYER } from '../data/player';
+import { propFrame, type PropName } from '../render/props';
+import { actorFrame, type ActorKind, type Pose } from '../render/sprites';
 import { BACKGROUND, drawFlame, drawFloorTile, drawRitualCircle, drawWallTile, hash } from '../render/terrain';
 import { audio } from '../audio/audio';
 import { hitsArc, type AttackEvent, type Telegraph } from '../combat/damage';
@@ -58,8 +60,10 @@ export class GameScene extends Phaser.Scene {
   boss: Boss | null = null;
   projectiles: Projectile[] = [];
 
-  private playerG!: Gfx;
-  private enemyG = new Map<Enemy, Gfx>();
+  /** Uno sprite per personaggio (o figura di scena), creato al primo disegno. */
+  private sprites = new Map<unknown, Phaser.GameObjects.Image>();
+  /** Sprite riusati per i proiettili in volo. */
+  private shots: Phaser.GameObjects.Image[] = [];
   private propG = new Map<string, Gfx>();
   private gateG: Gfx[] = [];
   /** Un Graphics per tile di muro, con il riquadro che occupa a schermo. */
@@ -87,7 +91,7 @@ export class GameScene extends Phaser.Scene {
   private pendingSave: SaveData | null = null;
   private saveTimer = 0;
   private sparks: Spark[] = [];
-  private ghostG!: Gfx;
+  private ghost!: Phaser.GameObjects.Image;
   /** Bagliori additivi a terra: lava, falò. */
   private glowG!: Gfx;
   /** Braci che salgono, in coordinate di schermo. */
@@ -109,7 +113,8 @@ export class GameScene extends Phaser.Scene {
   /** La scena viene riavviata tornando dal titolo: ogni stato va azzerato qui. */
   init(data: { save?: SaveData | null }): void {
     this.pendingSave = data?.save ?? null;
-    this.enemyG = new Map();
+    this.sprites = new Map();
+    this.shots = [];
     this.propG = new Map();
     this.gateG = [];
     this.wallG = [];
@@ -150,8 +155,7 @@ export class GameScene extends Phaser.Scene {
     this.lostXpG = this.add.graphics();
     this.createProps();
     this.player = new Player(this.level.start.x, this.level.start.y);
-    this.playerG = this.add.graphics();
-    this.ghostG = this.add.graphics().setDepth(85000);
+    this.ghost = this.add.image(0, 0, '__DEFAULT').setDepth(85000).setAlpha(0.14).setTintFill(0x9fd0ff).setVisible(false);
     if (save) {
       // Si riparte dall'ultimo falò, come dopo una morte.
       this.player.restore(save.player);
@@ -619,13 +623,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private spawnEnemies(): void {
-    for (const g of this.enemyG.values()) g.destroy();
-    this.enemyG.clear();
+    for (const e of this.enemies) {
+      this.sprites.get(e)?.destroy();
+      this.sprites.delete(e);
+    }
     this.enemies = this.level.enemies.map((s) => new Enemy(ENEMIES[s.type], s.x, s.y));
     const b = this.level.boss;
     this.boss = b && !this.world.bossDefeated ? new Boss(CUSTODE, b.x, b.y) : null;
     if (this.boss) this.enemies.push(this.boss);
-    for (const e of this.enemies) this.enemyG.set(e, this.add.graphics());
     this.target = null;
     this.manualLock = false;
   }
@@ -821,66 +826,66 @@ export class GameScene extends Phaser.Scene {
       pg.fillStyle(s.color, Math.min(1, s.life * 4));
       pg.fillRect(s.x - 1.5, s.y - 1.5, 3, 3);
     }
-    for (const pr of this.projectiles) {
+    this.projectiles.forEach((pr, i) => {
       const c = toScreen(pr.x, pr.y);
-      pg.fillStyle(0xffa050, 0.25);
-      pg.fillCircle(c.x, c.y - 22, 9);
-      pg.fillStyle(0xffd090, 1);
-      pg.fillCircle(c.x, c.y - 22, 4);
-    }
+      const f = propFrame(this, 'fireball', Math.floor(now / 70) + i);
+      let img = this.shots[i];
+      if (!img) this.shots.push((img = this.add.image(0, 0, f.key).setDepth(80000).setBlendMode(Phaser.BlendModes.ADD)));
+      img.setTexture(f.key).setOrigin(0.5, f.originY).setScale(f.displayScale).setPosition(c.x, c.y - 22).setVisible(true);
+    });
+    for (let i = this.projectiles.length; i < this.shots.length; i++) this.shots[i].setVisible(false);
 
     // Giocatore
     const dodging = player.state === 'dodge';
-    this.actor(this.playerG, player, {
+    const acting = player.state === 'attack' || player.state === 'skill';
+    const windupTime = player.state === 'skill' ? player.activeSkill?.windup ?? 0 : PLAYER.attack.windup;
+    this.actor(player, player, {
       kind: 'hero',
-      color: 0x3f7fd0,
+      color: 0x2f6fc8,
       facing: player.facing,
       scale: 1,
       alpha: player.invulnerable ? 0.45 : 1,
       flash: player.hurtFlash > 0,
-      squash: dodging ? 0.6 : 1,
-      weapon: player.state === 'attack' || player.state === 'skill' ? 30 : 18,
-      dead: player.state === 'dead',
+      pose:
+        player.state === 'dead' ? 'dead'
+          : dodging ? 'dodge'
+            : acting ? (player.stateTime < windupTime ? 'windup' : 'strike')
+              : undefined,
     });
 
     this.fadeWalls();
 
-    // Sagoma del giocatore sempre visibile, anche dietro ai muri.
-    const gg = this.ghostG.clear();
-    if (player.state !== 'dead') {
-      const s = toScreen(player.x, player.y);
-      const h = 30 * (dodging ? 0.6 : 1);
-      gg.lineStyle(1.5, 0x9fd0ff, 0.35);
-      gg.strokeRoundedRect(s.x - 9, s.y - h - 2, 18, h, 6);
-      gg.strokeCircle(s.x, s.y - h - 8, 7);
-    }
+    // Sagoma del giocatore sempre visibile, anche dietro ai muri: lo stesso sprite, tenue e sopra a tutto.
+    const body = this.sprites.get(player)!;
+    this.ghost
+      .setTexture(body.texture.key)
+      .setOrigin(body.originX, body.originY)
+      .setScale(body.scaleX)
+      .setPosition(body.x, body.y)
+      .setVisible(player.state !== 'dead');
 
     // Nemici
     for (const e of this.enemies) {
-      const g = this.enemyG.get(e)!;
       const isBoss = e instanceof Boss;
+      const kind: ActorKind = isBoss ? 'boss' : (e.def.id as ActorKind);
       if (e.dead) {
-        const fade = Math.max(0, 1 - e.stateTime / (isBoss ? 2.5 : 0.8));
+        const fade = Math.max(0, 1 - e.stateTime / (isBoss ? 2.5 : 1.4));
         if (fade <= 0) {
-          g.setVisible(false);
+          this.sprites.get(e)?.setVisible(false);
           continue;
         }
-        this.actor(g, e, {
-          kind: isBoss ? 'boss' : (e.def.id as ActorKind), color: e.def.color, facing: e.facing, scale: e.def.scale,
-          alpha: fade, flash: false, squash: 1, weapon: 0, dead: true,
-        });
+        this.actor(e, e, { kind, color: e.def.color, facing: e.facing, scale: e.def.scale, alpha: fade, flash: false, pose: 'dead' });
         continue;
       }
       const winding = e.state === 'windup' || e.state === 'transition';
-      this.actor(g, e, {
-        kind: isBoss ? 'boss' : (e.def.id as ActorKind),
+      this.actor(e, e, {
+        kind,
         color: isBoss ? e.color : e.def.color,
         facing: e.facing,
         scale: e.def.scale,
         alpha: 1,
         flash: e.hurtFlash > 0 || (e.state === 'transition' && Math.floor(now / 80) % 2 === 0),
-        squash: winding ? 1.08 : 1,
-        weapon: e.def.ranged ? 0 : e.state === 'strike' ? 32 : winding ? 10 : 18,
+        pose: winding ? 'windup' : e.state === 'strike' ? 'strike' : undefined,
         hpFrac: !isBoss && e.hp < e.def.maxHp ? e.hp / e.def.maxHp : undefined,
       });
     }
@@ -953,87 +958,69 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawProps(now: number): void {
-    const flick = Math.sin(now / 90) * 2;
     this.level.bonfires.forEach((_, i) => {
-      const g = this.propG.get(`bonfire${i}`)!.clear();
-      // Cerchio di pietre annerite, braci, la spada conficcata e la fiamma.
-      g.fillStyle(0x000000, 0.4);
-      g.fillEllipse(0, 1, 40, 18);
-      g.fillStyle(0x3a302e, 1);
-      for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * Math.PI * 2;
-        g.fillEllipse(Math.cos(a) * 16, Math.sin(a) * 7, 9, 6);
-      }
-      g.fillStyle(0x8a2410, 1);
-      g.fillEllipse(0, 0, 22, 9);
-      g.lineStyle(2.5, 0xa8a8b4, 1);
-      g.lineBetween(1, -2, 4, -38);
-      g.lineStyle(2.5, 0x6a5030, 1);
-      g.lineBetween(-2, -30, 9, -31);
-      drawFlame(g, -5, 0, 20, now, 1 + i);
-      drawFlame(g, 6, 1, 17, now, 4 + i);
-      drawFlame(g, 0, 2, 28 + flick, now, i);
+      const g = this.propG.get(`bonfire${i}`)!;
+      this.prop(`bonfire${i}`, g, 'bonfire', Math.floor(now / 90) + i * 3);
     });
 
     for (const c of this.level.chests) {
       const g = this.propG.get(c.id)!.clear();
       const open = this.world.openedChests.includes(c.id);
-      g.fillStyle(0x000000, 0.35);
-      g.fillEllipse(0, 2, 34, 14);
-      g.fillStyle(0x3e2416, 1);
-      g.fillRect(-14, -16, 28, 16);
-      g.fillStyle(0x2a2a30, 1);
-      g.fillRect(-14, -16, 3, 16);
-      g.fillRect(11, -16, 3, 16);
-      g.fillStyle(open ? 0x1c100a : 0x5a3620, 1);
-      if (open) g.fillRect(-14, -26, 28, 8);
-      else g.fillRect(-15, -22, 30, 8);
-      g.fillStyle(0xc8a050, 1);
-      if (!open) g.fillRect(-2, -18, 4, 6);
+      this.prop(c.id, g, open ? 'chest_open' : 'chest_closed');
       if (!open) {
-        g.fillStyle(0xffe0a0, 0.25 + 0.15 * Math.sin(now / 250));
-        g.fillCircle(0, -14, 18);
+        // Luccichio che invita ad aprirlo.
+        g.fillStyle(0xffe0a0, 0.14 + 0.1 * Math.sin(now / 250));
+        g.fillCircle(0, -10, 20);
       }
     }
 
     for (const c of this.level.choices) {
       const g = this.propG.get(`choice${c.id}`)!.clear();
       const made = this.world.choices[c.id];
+      const id = `choice${c.id}`;
       if (c.id === '1') {
-        // Pellegrino incatenato (resta se lo hai derubato)
-        if (made !== 'light') this.figure(g, 'pilgrim', 0x8a7a5c, 0.62, false);
-        g.lineStyle(2, 0x6e6e78, 1);
-        g.lineBetween(-10, -22, -18, -48);
-        g.lineBetween(10, -22, 18, -48);
+        // Pellegrino incatenato: se lo liberi restano solo le catene.
+        this.figure(id, g, 'pilgrim', 0x8a7a5c, made === 'light' ? null : 'kneel');
+        this.prop(`${id}:chains`, g, 'shackles', 0, 0.01);
       } else if (c.id === '2') {
-        // Altare con la coppa
-        g.fillStyle(0x000000, 0.35);
-        g.fillEllipse(0, 2, 44, 18);
-        g.fillStyle(0x4a4a52, 1);
-        g.fillRect(-18, -20, 36, 20);
-        g.fillStyle(0x62626c, 1);
-        g.fillRect(-20, -24, 40, 6);
-        g.fillStyle(0x9a8a6a, 1);
-        g.fillRect(-4, -32, 8, 8);
-        const glow = made === 'light' ? 0xffe8a0 : made === 'dark' ? 0x601010 : 0x902020;
-        g.fillStyle(glow, made ? 0.35 : 0.2 + 0.1 * Math.sin(now / 300));
-        g.fillCircle(0, -28, made === 'light' ? 26 : 14);
-      } else if (c.id === '3') {
-        // Disertore in ginocchio; cadavere se lo hai finito
-        if (made === 'light') continue;
-        this.figure(g, 'predone', ENEMIES.predone.color, 0.65, made === 'dark');
+        // Altare con la coppa: benedetto, profanato o ancora intatto.
+        this.prop(id, g, made === 'light' ? 'altar_light' : made === 'dark' ? 'altar_dark' : 'altar');
         if (!made) {
-          g.lineStyle(3, 0xd9d9e0, 1);
-          g.lineBetween(12, -2, 30, 4);
+          g.fillStyle(0xb02018, 0.12 + 0.08 * Math.sin(now / 300));
+          g.fillCircle(0, -26, 16);
         }
+      } else if (c.id === '3') {
+        // Disertore in ginocchio con la lama a terra; cadavere se lo hai finito.
+        this.figure(id, g, 'predone', ENEMIES.predone.color, made === 'light' ? null : made === 'dark' ? 'dead' : 'kneel');
+        this.prop(`${id}:blade`, g, made ? null : 'dropped_blade', 0, 0.01);
       }
     }
   }
 
-  /** Figura ferma di una scena (prigioniero, disertore): stessa grafica dei personaggi. */
-  private figure(g: Gfx, kind: ActorKind, color: number, squash: number, dead: boolean): void {
-    const { x, y } = g;
-    drawActor(g, x, y, { kind, color, facing: Math.PI / 4, scale: 1, alpha: 1, flash: false, squash, weapon: 0, dead });
+  /** Sprite di un oggetto di scena, ancorato al Graphics che ne segna posizione e profondità. */
+  private prop(id: string, at: Gfx, name: PropName | null, frame = 0, depthBias = -0.005): void {
+    const key = `prop:${id}`;
+    if (!name) {
+      this.sprites.get(key)?.setVisible(false);
+      return;
+    }
+    const f = propFrame(this, name, frame);
+    let img = this.sprites.get(key);
+    if (!img) this.sprites.set(key, (img = this.add.image(0, 0, f.key)));
+    img.setTexture(f.key).setOrigin(0.5, f.originY).setScale(f.displayScale).setPosition(at.x, at.y).setDepth(at.depth + depthBias).setVisible(true);
+  }
+
+  /** Figura ferma di una scena (prigioniero, disertore): stessi sprite dei personaggi. `null` = sparita. */
+  private figure(id: string, at: Gfx, kind: ActorKind, color: number, pose: Pose | null): void {
+    if (!pose) {
+      this.sprites.get(id)?.setVisible(false);
+      return;
+    }
+    const f = actorFrame(this, { kind, color, scale: 1, facing: Math.PI / 4, pose });
+    let img = this.sprites.get(id);
+    if (!img) this.sprites.set(id, (img = this.add.image(0, 0, f.key)));
+    // Appena dietro al Graphics dell'oggetto, così catene e spada a terra restano sopra.
+    img.setTexture(f.key).setOrigin(0.5, f.originY).setScale(f.displayScale).setPosition(at.x, at.y).setDepth(at.depth - 0.01).setVisible(true);
   }
 
   private drawGate(now: number): void {
@@ -1086,9 +1073,31 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private actor(g: Gfx, a: { x: number; y: number }, o: Omit<Parameters<typeof drawActor>[3], 'walk'>): void {
+  /** Disegna un personaggio: sceglie il fotogramma da direzione, posa e passo, e aggiorna il suo sprite. */
+  private actor(
+    key: unknown,
+    a: { x: number; y: number },
+    o: { kind: ActorKind; color: number; facing: number; scale: number; alpha: number; flash: boolean; pose?: Pose; hpFrac?: number },
+  ): void {
     const s = toScreen(a.x, a.y);
-    drawActor(g, s.x, s.y, { ...o, walk: o.dead ? undefined : this.walkOf(a) });
+    const walk = o.pose === 'dead' ? undefined : this.walkOf(a);
+    const pose: Pose = o.pose ?? (walk !== undefined ? 'walk' : 'idle');
+    const f = actorFrame(this, { kind: o.kind, color: o.color, scale: o.scale, facing: o.facing, pose, walk });
+    let img = this.sprites.get(key);
+    if (!img) this.sprites.set(key, (img = this.add.image(0, 0, f.key)));
+    img.setTexture(f.key).setOrigin(0.5, f.originY).setScale(f.displayScale).setPosition(s.x, s.y).setDepth(s.y).setAlpha(o.alpha).setVisible(true);
+    if (o.flash) img.setTintFill(0xffffff);
+    else img.clearTint();
+
+    if (o.hpFrac !== undefined) {
+      const w = 36 * o.scale;
+      const y = s.y - 56 * o.scale;
+      const g = this.projG;
+      g.fillStyle(0x000000, 0.8);
+      g.fillRect(s.x - w / 2 - 1, y - 1, w + 2, 6);
+      g.fillStyle(0xc0301c, 1);
+      g.fillRect(s.x - w / 2, y, w * o.hpFrac, 4);
+    }
   }
 
   private floatText(wx: number, wy: number, text: string, color: string): void {

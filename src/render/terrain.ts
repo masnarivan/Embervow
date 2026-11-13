@@ -1,6 +1,6 @@
 import type Phaser from 'phaser';
 import { TILE_H, TILE_W, toScreen } from '../core/iso';
-import { shade } from './actors';
+import { shade } from './sprites';
 
 // Ambiente degli Inferi: basalto crepato, vene di lava, muri di roccia vulcanica.
 // Tutto deterministico (hash sulla posizione del tile), così la mappa è uguale a ogni avvio.
