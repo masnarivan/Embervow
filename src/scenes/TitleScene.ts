@@ -5,13 +5,16 @@ import { BACKGROUND, drawFlame } from '../render/terrain';
 import { CONTROLS } from '../ui/controls';
 import { Embers, FONT, INK, PAINT, divider, emblazon, menuLabel } from '../ui/theme';
 
+/** Dove i beta tester segnalano bug e impressioni. */
+const FEEDBACK_URL = 'https://github.com/masnarivan/Embervow/issues/new';
+
 interface Entry {
   label: string;
   enabled: boolean;
   action: () => void;
 }
 
-/** Menu iniziale: continua, nuova partita, comandi. */
+/** Menu iniziale: continua, nuova partita, comandi, segnalazione bug. */
 export class TitleScene extends Phaser.Scene {
   private save: SaveData | null = null;
   private entries: Entry[] = [];
@@ -89,6 +92,7 @@ export class TitleScene extends Phaser.Scene {
       },
       { label: 'Nuova partita', enabled: true, action: () => this.newGame() },
       { label: 'Comandi', enabled: true, action: () => this.showControls(true) },
+      { label: 'Segnala un bug', enabled: true, action: () => this.openFeedback() },
     ];
     this.index = s ? 0 : 1;
     this.entries.forEach((e, i) => {
@@ -150,6 +154,11 @@ export class TitleScene extends Phaser.Scene {
   private startGame(save: SaveData | null): void {
     audio.play('rest');
     this.scene.start('game', { save });
+  }
+
+  private openFeedback(): void {
+    audio.play('ui');
+    window.open(FEEDBACK_URL, '_blank', 'noopener');
   }
 
   private showControls(show: boolean): void {
