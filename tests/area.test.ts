@@ -295,3 +295,47 @@ describe('boss', () => {
     expect(ITEMS[CUSTODE.drop]).toBeDefined();
   });
 });
+
+describe('pathfinding', () => {
+  it('aggira un muro invece di incastrarsi', async () => {
+    const { parseLevel } = await import('../src/core/level');
+    const { findPath } = await import('../src/core/path');
+    const { Enemy } = await import('../src/entities/Enemy');
+    const { ENEMIES } = await import('../src/data/enemies');
+    // Muro a U aperto verso l'alto: il predone è dentro, il bersaglio sotto.
+    const level = parseLevel(
+      [
+        '###########',
+        '#.........#',
+        '#..#...#..#',
+        '#..#...#..#',
+        '#..#####..#',
+        '#.........#',
+        '#.........#',
+        '###########',
+      ],
+      {},
+    );
+    const map = level.map;
+    const path = findPath(map, 5.5, 3.5, 5.5, 6.5);
+    expect(path).not.toBeNull();
+    expect(path!.at(-1)).toEqual({ x: 5.5, y: 6.5 });
+
+    const e = new Enemy(ENEMIES.predone, 5.5, 3.5);
+    e.state = 'chase';
+    const target = { x: 5.5, y: 6.5, radius: 0.3, state: 'idle' };
+    let reached = false;
+    for (let i = 0; i < 60 * 8 && !reached; i++) {
+      e.update(1 / 60, target, map);
+      reached = (e.state as string) === 'windup';
+    }
+    expect(reached).toBe(true);
+  });
+
+  it('non trova percorsi verso zone chiuse', async () => {
+    const { parseLevel } = await import('../src/core/level');
+    const { findPath } = await import('../src/core/path');
+    const level = parseLevel(['#####', '#.#.#', '#####'], {});
+    expect(findPath(level.map, 1.5, 1.5, 3.5, 1.5)).toBeNull();
+  });
+});

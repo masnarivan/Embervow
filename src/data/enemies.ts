@@ -33,7 +33,7 @@ const deg = (d: number) => (d * Math.PI) / 180;
 export const ENEMIES: Record<string, EnemyDef> = {
   predone: {
     id: 'predone',
-    name: 'Predone',
+    name: 'Diavolo Predone',
     color: 0xb86b4b,
     scale: 1,
     maxHp: 60,
@@ -55,7 +55,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   },
   bruto: {
     id: 'bruto',
-    name: 'Bruto',
+    name: 'Demone Bruto',
     color: 0x7a5aa6,
     scale: 1.35,
     maxHp: 150,
@@ -77,7 +77,7 @@ export const ENEMIES: Record<string, EnemyDef> = {
   },
   arciere: {
     id: 'arciere',
-    name: 'Arciere',
+    name: 'Demone Arciere',
     color: 0x5f8a4a,
     scale: 0.95,
     maxHp: 40,

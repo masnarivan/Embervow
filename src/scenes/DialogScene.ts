@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import type { MoralChoice } from '../data/choices';
+import { FONT, INK, PAINT, backdrop, divider, frame } from '../ui/theme';
 
-const FONT = 'Georgia, serif';
 const W = 680;
 
 export interface DialogData {
@@ -34,28 +34,26 @@ export class DialogScene extends Phaser.Scene {
     const { width, height } = this.scale;
     const scale = Math.min(1, (width - 32) / W);
     const boxH = 300;
-    this.add.rectangle(0, 0, width, height, 0x000000, 0.45).setOrigin(0);
+    backdrop(this, 0.5);
     const root = this.add.container((width - W * scale) / 2, height - (boxH + 30) * scale).setScale(scale);
     const g = this.add.graphics();
-    g.fillStyle(0x0d0e12, 0.96);
-    g.fillRect(0, 0, W, boxH);
-    g.lineStyle(2, 0x6a604a, 1);
-    g.strokeRect(0, 0, W, boxH);
+    frame(g, 0, 0, W, boxH);
+    divider(g, W / 2, 48, W - 80, PAINT.gold);
     root.add(g);
-    const text = (x: number, y: number, s: string, size: number, color = '#d8d2c4') => {
+    const text = (x: number, y: number, s: string, size: number, color = INK.text) => {
       const t = this.add.text(x, y, s, { fontFamily: FONT, fontSize: `${size}px`, color });
       root.add(t);
       return t;
     };
 
     const c = this.data_.choice;
-    text(24, 18, c.title, 20, '#e8d8a8');
-    this.body = text(24, 54, c.text, 15).setWordWrapWidth(W - 48).setLineSpacing(5);
+    text(W / 2, 16, c.title, 20, INK.title).setOrigin(0.5, 0);
+    this.body = text(24, 62, c.text, 15).setWordWrapWidth(W - 48).setLineSpacing(5);
     c.options.forEach((o, i) => {
       const side = o.side === 'light' ? 'Luce' : 'Oscurità';
-      this.optionTexts.push(text(24, 196 + i * 30, `${i + 1}.  ${o.label}   (via della ${side})`, 15));
+      this.optionTexts.push(text(24, 204 + i * 28, `${i + 1}.  ${o.label}   (via della ${side})`, 15));
     });
-    this.footer = text(24, boxH - 30, '1 / 2 oppure frecce + Invio per scegliere · Esc per andartene', 12, '#8f897c');
+    this.footer = text(24, boxH - 30, '1 / 2 oppure frecce + Invio per scegliere · Esc per andartene', 12, INK.dim);
 
     this.input.keyboard!.on('keydown', this.onKey, this);
     this.redraw();
@@ -94,7 +92,12 @@ export class DialogScene extends Phaser.Scene {
   }
 
   private redraw(): void {
-    this.optionTexts.forEach((t, i) => t.setColor(i === this.index ? '#f0d878' : '#b8b2a4'));
+    this.optionTexts.forEach((t, i) => {
+      const o = this.data_.choice.options[i];
+      const side = o.side === 'light' ? 'Luce' : 'Oscurità';
+      const sel = i === this.index;
+      t.setText(`${sel ? '◆' : '◇'}  ${i + 1}.  ${o.label}   (via della ${side})`).setColor(sel ? INK.gold : INK.dim);
+    });
   }
 
   private close(): void {

@@ -3,7 +3,7 @@ import { Stamina } from '../combat/stamina';
 import { computeDamage, type AttackEvent } from '../combat/damage';
 import { moveWithCollision, type GameMap } from '../core/map';
 import { WARRIOR, type ClassDef, type Stats } from '../data/classes';
-import { ITEMS, type Slot } from '../data/items';
+import { ITEMS, KEY_ITEMS, RESPEC_ITEM, type Slot } from '../data/items';
 import { PLAYER } from '../data/player';
 import { SKILLS, type BuffStat, type SkillDef } from '../data/skills';
 import { TALENTS, TALENT_CONFIG } from '../data/talents';
@@ -18,6 +18,8 @@ export interface PlayerSave {
   talents: string[];
   inventory: string[];
   equipped: Record<Slot, string | null>;
+  /** Assente nei salvataggi più vecchi. */
+  keyItems?: string[];
 }
 
 export type PlayerState = 'idle' | 'attack' | 'skill' | 'dodge' | 'stagger' | 'dead';
@@ -80,6 +82,7 @@ export class Player {
   /** Oggetti posseduti (id), in ordine di raccolta. */
   readonly inventory: string[] = [];
   readonly equipped: Record<Slot, string | null> = { arma: null, armatura: null, amuleto: null };
+  readonly keyItems: string[] = [];
 
   facing = 0;
   level = 1;
@@ -188,6 +191,14 @@ export class Player {
     if (ITEMS[id] && !this.inventory.includes(id)) this.inventory.push(id);
   }
 
+  addKeyItem(id: string): void {
+    if (KEY_ITEMS[id] && !this.keyItems.includes(id)) this.keyItems.push(id);
+  }
+
+  hasKeyItem(id: string): boolean {
+    return this.keyItems.includes(id);
+  }
+
   canEquip(id: string): LearnCheck {
     const item = ITEMS[id];
     if (!item || !this.inventory.includes(id)) return { ok: false, reason: 'Non lo possiedi' };
@@ -222,11 +233,22 @@ export class Player {
     return true;
   }
 
+  /** La via scelta è definitiva: si rifà solo con l'oggetto di fine gioco. */
+  canRespec(): LearnCheck {
+    if (!this.hasKeyItem(RESPEC_ITEM)) {
+      return { ok: false, reason: `La via scelta è definitiva: serve l’${KEY_ITEMS[RESPEC_ITEM].name}` };
+    }
+    if (this.tree.toJSON().length === 0) return { ok: false, reason: 'Non hai talenti da dimenticare' };
+    return { ok: true };
+  }
+
   /** Dimentica tutti i talenti e restituisce i punti. */
-  respec(): void {
+  respec(): boolean {
+    if (!this.canRespec().ok) return false;
     this.tree.respec();
     this.refreshBuild();
     this.cooldowns.clear();
+    return true;
   }
 
   /** Aggiunge XP; ritorna i livelli guadagnati. */
@@ -295,6 +317,7 @@ export class Player {
       talents: this.tree.toJSON(),
       inventory: [...this.inventory],
       equipped: { ...this.equipped },
+      keyItems: [...this.keyItems],
     };
   }
 
@@ -306,6 +329,8 @@ export class Player {
     this.tree.restore(s.talents);
     this.inventory.length = 0;
     for (const id of s.inventory) this.addItem(id);
+    this.keyItems.length = 0;
+    for (const id of s.keyItems ?? []) this.addKeyItem(id);
     for (const slot of Object.keys(this.equipped) as Slot[]) {
       const id = s.equipped[slot];
       this.equipped[slot] = id && this.inventory.includes(id) && ITEMS[id].slot === slot ? id : null;

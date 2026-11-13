@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Alignment } from '../src/alignment/alignment';
 import { createTestMap } from '../src/core/map';
 import { WARRIOR } from '../src/data/classes';
+import { RESPEC_ITEM } from '../src/data/items';
 import { SKILLS } from '../src/data/skills';
 import { TALENTS, TALENT_CONFIG } from '../src/data/talents';
 import { Player, type PlayerInput } from '../src/entities/Player';
@@ -131,7 +132,10 @@ describe('talenti sul giocatore', () => {
     learnAll(p, 'light', ['pal_fede']);
     expect(p.maxHp).toBe(Math.round(WARRIOR.base.maxHp * 1.15));
     expect(p.hp).toBe(p.maxHp);
-    p.respec();
+    expect(p.respec()).toBe(false); // senza l'Acqua del Lete la via è definitiva
+    expect(p.maxHp).toBe(Math.round(WARRIOR.base.maxHp * 1.15));
+    p.addKeyItem(RESPEC_ITEM);
+    expect(p.respec()).toBe(true);
     expect(p.maxHp).toBe(WARRIOR.base.maxHp);
     expect(p.hp).toBe(WARRIOR.base.maxHp);
   });

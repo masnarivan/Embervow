@@ -48,8 +48,8 @@ const deg = (d: number) => (d * Math.PI) / 180;
 
 export const CUSTODE: BossDef = {
   id: 'custode',
-  name: 'Custode Caduto',
-  title: 'Il Custode Caduto',
+  name: 'Custode della Soglia',
+  title: 'Il Custode della Soglia',
   color: 0x8c93a3,
   scale: 1.9,
   maxHp: 750,

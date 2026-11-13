@@ -38,6 +38,7 @@ export function parseSave(raw: unknown): SaveData | null {
   const w = raw.world;
   if (!isObj(p) || !isObj(w)) return null;
   if (!isNum(p.level) || !isNum(p.xp) || !isStrArr(p.talents) || !isStrArr(p.inventory) || !isObj(p.equipped)) return null;
+  if (p.keyItems !== undefined && !isStrArr(p.keyItems)) return null;
   if (!isObj(p.alignment) || !isSides(p.alignment.earned) || !isSides(p.alignment.spent)) return null;
   if (!isObj(w.choices) || !isStrArr(w.openedChests) || typeof w.bossDefeated !== 'boolean' || !isNum(w.lastBonfire)) {
     return null;
@@ -55,6 +56,7 @@ export interface SaveStore {
   clear(): Promise<void>;
 }
 
+// Nome storico (titolo di lavoro): cambiarlo farebbe perdere i salvataggi esistenti.
 const DB_NAME = 'luce-e-ombra';
 const STORE = 'saves';
 const KEY = 'slot1';

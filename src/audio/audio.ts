@@ -13,6 +13,7 @@ interface Settings {
   sfx: boolean;
 }
 
+// Nome storico (titolo di lavoro): cambiarlo farebbe perdere le preferenze salvate.
 const SETTINGS_KEY = 'luce-e-ombra:audio';
 
 function loadSettings(): Settings {

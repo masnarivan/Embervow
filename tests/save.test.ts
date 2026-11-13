@@ -50,6 +50,21 @@ describe('salvataggio', () => {
     expect(data!.lostXp).toEqual({ x: 3, y: 4, amount: 20 });
   });
 
+  it('salva gli oggetti chiave; i salvataggi vecchi senza il campo restano validi', () => {
+    const p = midGame();
+    p.addKeyItem('acqua_del_lete');
+    const snap = p.snapshot();
+    const q = new Player(0, 0);
+    q.restore(snap);
+    expect(q.canRespec().ok).toBe(true);
+
+    const { keyItems: _omit, ...old } = snap;
+    expect(parseSave(makeSave(old, newWorld(), null))).not.toBeNull();
+    const r = new Player(0, 0);
+    r.restore(old);
+    expect(r.canRespec().ok).toBe(false);
+  });
+
   it('il salvataggio è una copia: cambiare il mondo dopo non lo altera', () => {
     const world = newWorld();
     const s = makeSave(new Player(0, 0).snapshot(), world, null);

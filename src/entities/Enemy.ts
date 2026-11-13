@@ -1,6 +1,11 @@
 import { computeDamage, type AttackEvent, type Telegraph } from '../combat/damage';
 import { hasLineOfSight, moveWithCollision, type GameMap } from '../core/map';
+import { findPath, hasClearPath } from '../core/path';
+import type { Vec2 } from '../core/iso';
 import type { EnemyDef } from '../data/enemies';
+
+/** Ogni quanto un nemico ricalcola il percorso (secondi). */
+const REPATH_EVERY = 0.3;
 
 export type EnemyState = 'idle' | 'chase' | 'windup' | 'strike' | 'recover' | 'stagger' | 'transition' | 'dead';
 
@@ -24,6 +29,9 @@ export class Enemy {
   protected staggerFor = 0;
   protected kx = 0;
   protected ky = 0;
+  private path: Vec2[] | null = null;
+  private pathIdx = 0;
+  private pathAge = 0;
 
   constructor(
     readonly def: EnemyDef,
@@ -99,10 +107,7 @@ export class Enemy {
         const hx = this.homeX - this.x;
         const hy = this.homeY - this.y;
         const hd = Math.hypot(hx, hy);
-        if (hd > 0.15) {
-          this.facing = Math.atan2(hy, hx);
-          this.move(map, (hx / hd) * def.speed * 0.7 * dt, (hy / hd) * def.speed * 0.7 * dt);
-        }
+        if (hd > 0.15) this.moveToward(map, this.homeX, this.homeY, def.speed * 0.7 * dt, dt);
         break;
       }
       case 'chase': {
@@ -116,10 +121,11 @@ export class Enemy {
           // Troppo vicino: indietreggia, poi tira.
           this.move(map, (-dx / dist) * def.speed * 0.8 * dt, (-dy / dist) * def.speed * 0.8 * dt);
           if (this.stateTime > 1.2 && hasLineOfSight(map, this.x, this.y, target.x, target.y)) this.setState('windup');
-        } else if (dist <= def.attackRange + target.radius && (!def.ranged || hasLineOfSight(map, this.x, this.y, target.x, target.y))) {
+        } else if (dist <= def.attackRange + target.radius && hasLineOfSight(map, this.x, this.y, target.x, target.y)) {
+          // Niente colpi attraverso i muri: se non lo vede, continua ad aggirare.
           this.setState('windup');
         } else {
-          this.move(map, (dx / dist) * def.speed * dt, (dy / dist) * def.speed * dt);
+          this.moveToward(map, target.x, target.y, def.speed * dt, dt);
         }
         break;
       }
@@ -159,6 +165,48 @@ export class Enemy {
       }
     }
     return null;
+  }
+
+  /**
+   * Avanza di `step` verso (tx, ty): dritto se la via è libera, altrimenti
+   * lungo un percorso che aggira i muri (ricalcolato ogni REPATH_EVERY).
+   */
+  protected moveToward(map: GameMap, tx: number, ty: number, step: number, dt: number): void {
+    // Un po' di margine: una linea che sfiora uno spigolo non conta come libera.
+    const r = Math.min(this.radius + 0.04, 0.49);
+    let wx = tx;
+    let wy = ty;
+    if (hasClearPath(map, this.x, this.y, tx, ty, r)) {
+      this.path = null;
+    } else {
+      this.pathAge -= dt;
+      if (!this.path || this.pathAge <= 0) {
+        this.path = findPath(map, this.x, this.y, tx, ty);
+        this.pathIdx = 0;
+        this.pathAge = REPATH_EVERY;
+      }
+      const path = this.path;
+      if (path) {
+        // Punta al tratto più lontano raggiungibile in linea retta: taglia gli zig-zag della griglia.
+        while (this.pathIdx + 1 < path.length) {
+          const next = path[this.pathIdx + 1];
+          const cur = path[this.pathIdx];
+          const reached = Math.hypot(cur.x - this.x, cur.y - this.y) < 0.1;
+          if (!reached && !hasClearPath(map, this.x, this.y, next.x, next.y, r)) break;
+          this.pathIdx++;
+        }
+        wx = path[this.pathIdx].x;
+        wy = path[this.pathIdx].y;
+      }
+      // Senza percorso (bersaglio irraggiungibile) va dritto come può.
+    }
+    const dx = wx - this.x;
+    const dy = wy - this.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1e-4) return;
+    this.facing = Math.atan2(dy, dx);
+    const s = Math.min(step, d);
+    this.move(map, (dx / d) * s, (dy / d) * s);
   }
 
   move(map: GameMap, dx: number, dy: number): void {

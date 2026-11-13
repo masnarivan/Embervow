@@ -1,8 +1,7 @@
 import Phaser from 'phaser';
 import { audio } from '../audio/audio';
 import { CONTROLS } from '../ui/controls';
-
-const FONT = 'Georgia, serif';
+import { FONT, INK, backdrop, divider, emblazon, frame, menuLabel } from '../ui/theme';
 
 export interface PauseData {
   /** Salva e torna al menu iniziale. */
@@ -38,8 +37,13 @@ export class PauseScene extends Phaser.Scene {
 
   create(): void {
     const { width, height } = this.scale;
-    this.add.rectangle(0, 0, width, height, 0x000000, 0.7).setOrigin(0);
-    this.add.text(width / 2, height * 0.25, 'Pausa', { fontFamily: FONT, fontSize: '36px', color: '#e8d8a8' }).setOrigin(0.5);
+    backdrop(this, 0.72);
+    const g = this.add.graphics();
+    const pw = Math.min(440, width - 32);
+    const top = height * 0.25 - 50;
+    frame(g, (width - pw) / 2, top, pw, height * 0.38 + 4 * 40 + 40 - top);
+    divider(g, width / 2, height * 0.25 + 30, pw - 80);
+    emblazon(this.add.text(width / 2, height * 0.25, 'PAUSA', { fontFamily: FONT, fontSize: '34px' }).setOrigin(0.5).setLetterSpacing(6));
     this.labels().forEach((_, i) => {
       this.texts.push(
         this.add.text(width / 2, height * 0.38 + i * 40, '', { fontFamily: FONT, fontSize: '20px' }).setOrigin(0.5),
@@ -47,8 +51,8 @@ export class PauseScene extends Phaser.Scene {
     });
     this.controls = this.add.container(width / 2, height * 0.36).setVisible(false);
     CONTROLS.forEach(([k, what], i) => {
-      this.controls.add(this.add.text(-20, i * 24, k, { fontFamily: FONT, fontSize: '15px', color: '#f0d878' }).setOrigin(1, 0));
-      this.controls.add(this.add.text(0, i * 24, what, { fontFamily: FONT, fontSize: '15px', color: '#d8d2c4' }));
+      this.controls.add(this.add.text(-20, i * 24, k, { fontFamily: FONT, fontSize: '15px', color: INK.gold }).setOrigin(1, 0));
+      this.controls.add(this.add.text(0, i * 24, what, { fontFamily: FONT, fontSize: '15px', color: INK.text }));
     });
     this.input.keyboard!.on('keydown', this.onKey, this);
     this.refresh();
@@ -106,7 +110,7 @@ export class PauseScene extends Phaser.Scene {
 
   private refresh(): void {
     const labels = this.labels();
-    this.texts.forEach((t, i) => t.setText(i === this.index ? `—  ${labels[i]}  —` : labels[i]).setColor(i === this.index ? '#f0d878' : '#b8b2a4'));
+    this.texts.forEach((t, i) => t.setText(menuLabel(labels[i], i === this.index)).setColor(i === this.index ? INK.gold : INK.text));
   }
 
   private close(): void {

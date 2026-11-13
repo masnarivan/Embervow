@@ -23,20 +23,20 @@ export interface MoralChoice {
   after: Record<Side, string>;
 }
 
-/** Le scelte morali della prima area; l'id è la cifra nella mappa. */
+/** Le scelte morali della prima area (la soglia degli Inferi); l'id è la cifra nella mappa. */
 export const CHOICES: Record<string, MoralChoice> = {
   '1': {
     id: '1',
     prompt: '[E] Parla al prigioniero',
     title: 'Il pellegrino incatenato',
     text:
-      'Un pellegrino è incatenato al muro, le labbra spaccate dalla sete. «Ti prego… liberami. ' +
-      'Non ho nulla, solo quest’amuleto che porto per mia madre.»',
+      'Un pellegrino è incatenato al muro, le labbra spaccate dalla sete. «Sono sceso a cercare la speranza, ' +
+      'come te. I demoni mi hanno preso alla soglia. Ti prego… liberami. Non ho nulla, solo quest’amuleto che porto per mia madre.»',
     options: [
       {
         label: 'Spezza le catene e lascialo andare',
         side: 'light', points: 3,
-        result: 'Il pellegrino ti stringe le mani. «Non ho nulla da darti… ma non dimenticherò il tuo volto.» Poi zoppica verso l’uscita.',
+        result: 'Il pellegrino ti stringe le mani. «Non ho nulla da darti… ma non dimenticherò il tuo volto.» Poi zoppica verso la luce della superficie.',
       },
       {
         label: 'Strappagli l’amuleto e lascialo alle catene',
@@ -54,8 +54,8 @@ export const CHOICES: Record<string, MoralChoice> = {
     prompt: '[E] Esamina l’altare',
     title: 'L’altare consunto',
     text:
-      'Un altare di pietra, consumato da secoli di mani. Sopra, una coppa colma di sangue scuro, ' +
-      'ancora caldo. Nell’aria c’è odore di incenso e di ferro.',
+      'Un altare di pietra, consumato da secoli di mani: qualcuno pregava anche qui, sulla soglia degli Inferi. ' +
+      'Sopra, una coppa colma di sangue di demone, scuro e ancora caldo. Nell’aria c’è odore di zolfo e di ferro.',
     options: [
       {
         label: 'Inginocchiati e prega in silenzio',
@@ -75,11 +75,11 @@ export const CHOICES: Record<string, MoralChoice> = {
   },
   '3': {
     id: '3',
-    prompt: '[E] Avvicinati al predone ferito',
+    prompt: '[E] Avvicinati al diavolo ferito',
     title: 'Il disertore',
     text:
-      'Un predone è in ginocchio, la spada a terra, una mano premuta sul fianco. «Basta… me ne vado. ' +
-      'Il Custode oltre la nebbia ha già preso i miei fratelli. Lasciami andare e non mi rivedrai mai più.»',
+      'Un diavolo è in ginocchio, la spada a terra, una mano artigliata premuta sul fianco. «Basta… non servo più Satana. ' +
+      'Da quando ha rubato il vaso, il Custode oltre la nebbia divora anche noi. Lasciami andare e non mi rivedrai mai più.»',
     options: [
       {
         label: 'Lascialo andare',
@@ -89,7 +89,7 @@ export const CHOICES: Record<string, MoralChoice> = {
       {
         label: 'Finiscilo',
         side: 'dark', points: 2, xp: 30,
-        result: 'Non oppone resistenza. Tra le sue cose non c’è nulla di valore, solo la stanchezza di chi ha già perso.',
+        result: 'Non oppone resistenza. Tra le sue cose non c’è nulla di valore, solo la stanchezza di chi aveva già perso ogni speranza.',
       },
     ],
     after: {

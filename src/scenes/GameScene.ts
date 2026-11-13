@@ -1,9 +1,11 @@
 import Phaser from 'phaser';
+import { drawActor, type ActorKind } from '../render/actors';
+import { BACKGROUND, drawFlame, drawFloorTile, drawRitualCircle, drawWallTile, hash } from '../render/terrain';
 import { audio } from '../audio/audio';
 import { hitsArc, type AttackEvent, type Telegraph } from '../combat/damage';
 import { projectileHits, spawnProjectiles, stepProjectile, type Projectile } from '../combat/projectiles';
 import { canKeep, cycleTarget, pickTarget } from '../combat/targeting';
-import { TILE_H, TILE_W, screenDirToWorld, toScreen, worldAngleToScreenDir, type Vec2 } from '../core/iso';
+import { TILE_H, TILE_W, screenDirToWorld, toScreen, type Vec2 } from '../core/iso';
 import { insideArena, parseLevel, setGate, type Level } from '../core/level';
 import { WALL, hasLineOfSight } from '../core/map';
 import { newWorld, type WorldState } from '../core/world';
@@ -21,6 +23,8 @@ import type { DialogData } from './DialogScene';
 import type { PauseData } from './PauseScene';
 
 type Gfx = Phaser.GameObjects.Graphics;
+type Walk = { x: number; y: number; phase: number; moving: boolean };
+const EMBER_COUNT = 46;
 type KeyName = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' | 'Q' | 'TAB' | 'T' | 'I' | 'ESC' | 'SPACE' | 'E' | 'ONE' | 'TWO' | 'THREE' | 'FOUR';
 type LevelChest = Level['chests'][number];
 type LevelChoice = Level['choices'][number];
@@ -30,6 +34,8 @@ type Interaction =
   | { kind: 'choice'; choice: LevelChoice };
 
 const WALL_HEIGHT = 44;
+/** Opacità dei muri che coprono il giocatore. */
+const WALL_FADE_ALPHA = 0.28;
 const RESPAWN_DELAY = 2.6;
 const INTERACT_RANGE = 1.4;
 /** Salvataggio automatico periodico, oltre a quelli su falò, scelte, forzieri e boss. */
@@ -56,6 +62,8 @@ export class GameScene extends Phaser.Scene {
   private enemyG = new Map<Enemy, Gfx>();
   private propG = new Map<string, Gfx>();
   private gateG: Gfx[] = [];
+  /** Un Graphics per tile di muro, con il riquadro che occupa a schermo. */
+  private wallG: { g: Gfx; x: number; top: number; bottom: number; alpha: number }[] = [];
   private fx!: Gfx;
   private projG!: Gfx;
   private hud!: Hud;
@@ -80,6 +88,14 @@ export class GameScene extends Phaser.Scene {
   private saveTimer = 0;
   private sparks: Spark[] = [];
   private ghostG!: Gfx;
+  /** Bagliori additivi a terra: lava, falò. */
+  private glowG!: Gfx;
+  /** Braci che salgono, in coordinate di schermo. */
+  private emberG!: Gfx;
+  private embers: { x: number; y: number; v: number; seed: number }[] = [];
+  private vignette!: Phaser.GameObjects.Image;
+  private lavaTiles: { x: number; y: number; seed: number }[] = [];
+  private walks = new WeakMap<object, Walk>();
   private prevStates = new Map<Enemy, string>();
   private prevPlayerState = 'idle';
   private onHidden = (): void => {
@@ -96,6 +112,10 @@ export class GameScene extends Phaser.Scene {
     this.enemyG = new Map();
     this.propG = new Map();
     this.gateG = [];
+    this.wallG = [];
+    this.lavaTiles = [];
+    this.embers = [];
+    this.walks = new WeakMap();
     this.projectiles = [];
     this.sparks = [];
     this.prevStates = new Map();
@@ -121,7 +141,9 @@ export class GameScene extends Phaser.Scene {
       this.world = structuredClone(save.world);
       if (!this.level.bonfires[this.world.lastBonfire]) this.world.lastBonfire = 0;
     }
+    this.cameras.main.setBackgroundColor(BACKGROUND);
     this.drawMap();
+    this.createAtmosphere();
 
     this.fx = this.add.graphics().setDepth(-0.5);
     this.projG = this.add.graphics().setDepth(80000);
@@ -468,7 +490,7 @@ export class GameScene extends Phaser.Scene {
     if (!it) return '';
     switch (it.kind) {
       case 'bonfire':
-        return '[E] Riposa al falò · [T] Talenti e respec';
+        return '[E] Riposa al falò · [T] Talenti';
       case 'chest':
         return '[E] Apri il forziere';
       case 'choice': {
@@ -620,29 +642,16 @@ export class GameScene extends Phaser.Scene {
 
   private drawMap(): void {
     const { w, h, tiles } = this.level.map;
-    const hw = TILE_W / 2;
     const hh = TILE_H / 2;
     const floor = this.add.graphics().setDepth(-1);
     const isWallAt = (x: number, y: number) => x < 0 || y < 0 || x >= w || y >= h || tiles[y * w + x] === WALL;
-    // Un Graphics per diagonale (x + y costante = stessa profondità a schermo).
-    const walls = new Map<number, Gfx>();
 
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const c = toScreen(x + 0.5, y + 0.5);
         if (!isWallAt(x, y)) {
           const arena = this.level.arena.has(y * w + x);
-          const even = (x + y) % 2 === 0;
-          floor.fillStyle(arena ? (even ? 0x34302c : 0x302c29) : even ? 0x2c3038 : 0x292d34, 1);
-          floor.lineStyle(1, 0x1c1f25, 1);
-          floor.beginPath();
-          floor.moveTo(c.x, c.y - hh);
-          floor.lineTo(c.x + hw, c.y);
-          floor.lineTo(c.x, c.y + hh);
-          floor.lineTo(c.x - hw, c.y);
-          floor.closePath();
-          floor.fillPath();
-          floor.strokePath();
+          if (drawFloorTile(floor, c.x, c.y, x, y, arena)) this.lavaTiles.push({ x: c.x, y: c.y, seed: hash(x, y, 7) * 6.28 });
           continue;
         }
         // Solo i muri che confinano con il pavimento: gli altri non si vedono.
@@ -651,28 +660,93 @@ export class GameScene extends Phaser.Scene {
           for (let dx = -1; dx <= 1; dx++) if (!isWallAt(x + dx, y + dy)) visible = true;
         }
         if (!visible) continue;
-        let g = walls.get(x + y);
-        if (!g) {
-          g = this.add.graphics().setDepth(c.y);
-          walls.set(x + y, g);
-        }
+        // Un Graphics per tile: così i muri che coprono il giocatore sfumano uno per uno.
+        const g = this.add.graphics().setDepth(c.y);
         const top = c.y - WALL_HEIGHT;
-        const quad = (color: number, pts: number[]) => {
-          g.fillStyle(color, 1);
-          g.beginPath();
-          g.moveTo(pts[0], pts[1]);
-          for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]);
-          g.closePath();
-          g.fillPath();
-        };
-        quad(0x3a3f4a, [c.x - hw, top, c.x, top + hh, c.x, c.y + hh, c.x - hw, c.y]);
-        quad(0x2e323b, [c.x + hw, top, c.x, top + hh, c.x, c.y + hh, c.x + hw, c.y]);
-        quad(0x555b68, [c.x, top - hh, c.x + hw, top, c.x, top + hh, c.x - hw, top]);
+        this.wallG.push({ g, x: c.x, top: top - hh, bottom: c.y + hh, alpha: 1 });
+        drawWallTile(g, c.x, c.y, x, y, WALL_HEIGHT);
       }
     }
+    if (this.level.boss) drawRitualCircle(floor, this.level.boss.x, this.level.boss.y, 4.2);
     for (const gt of this.level.gate) {
       const c = toScreen(gt.tx + 0.5, gt.ty + 0.5);
       this.gateG.push(this.add.graphics().setPosition(c.x, c.y).setDepth(c.y));
+    }
+  }
+
+  /** Bagliori, braci e vignetta: strati fissi sopra o sotto il mondo. */
+  private createAtmosphere(): void {
+    this.glowG = this.add.graphics().setDepth(-0.8).setBlendMode(Phaser.BlendModes.ADD);
+    this.emberG = this.add.graphics().setScrollFactor(0).setDepth(95000).setBlendMode(Phaser.BlendModes.ADD);
+    for (let i = 0; i < EMBER_COUNT; i++) {
+      this.embers.push({ x: Math.random(), y: Math.random(), v: 0.02 + Math.random() * 0.05, seed: Math.random() * 6.28 });
+    }
+    if (!this.textures.exists('vignette')) {
+      const size = 512;
+      const tex = this.textures.createCanvas('vignette', size, size)!;
+      const ctx = tex.getContext();
+      const grad = ctx.createRadialGradient(size / 2, size / 2, size * 0.22, size / 2, size / 2, size * 0.72);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(0.6, 'rgba(20,2,2,0.45)');
+      grad.addColorStop(1, 'rgba(6,0,0,0.92)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+      tex.refresh();
+    }
+    this.vignette = this.add.image(0, 0, 'vignette').setOrigin(0).setScrollFactor(0).setDepth(96000);
+    const fit = () => this.vignette.setDisplaySize(this.scale.width, this.scale.height);
+    fit();
+    this.scale.on(Phaser.Scale.Events.RESIZE, fit);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.scale.off(Phaser.Scale.Events.RESIZE, fit));
+  }
+
+  /** Fase della camminata di un personaggio, ricavata da quanto si è spostato dall'ultimo frame. */
+  private walkOf(a: { x: number; y: number }): number | undefined {
+    let w = this.walks.get(a);
+    if (!w) this.walks.set(a, (w = { x: a.x, y: a.y, phase: 0, moving: false }));
+    const dist = Math.hypot(a.x - w.x, a.y - w.y);
+    w.moving = dist > 0.002;
+    if (w.moving) w.phase += Math.min(dist, 0.3) * 5.5;
+    w.x = a.x;
+    w.y = a.y;
+    return w.moving ? w.phase : undefined;
+  }
+
+  private drawAtmosphere(now: number, dt: number): void {
+    const glow = this.glowG.clear();
+    const view = this.cameras.main.worldView;
+    for (const t of this.lavaTiles) {
+      if (t.x < view.x - 80 || t.x > view.right + 80 || t.y < view.y - 80 || t.y > view.bottom + 80) continue;
+      const a = 0.1 + 0.05 * Math.sin(now / 600 + t.seed);
+      glow.fillStyle(0xff5a14, a);
+      glow.fillEllipse(t.x, t.y, 84, 42);
+      glow.fillStyle(0xff8a30, a);
+      glow.fillEllipse(t.x, t.y, 40, 20);
+    }
+    for (const b of this.level.bonfires) {
+      const c = toScreen(b.x, b.y);
+      const f = 1 + 0.06 * Math.sin(now / 90) + 0.04 * Math.sin(now / 37);
+      for (let i = 0; i < 4; i++) {
+        glow.fillStyle(0xff8a30, 0.07);
+        glow.fillEllipse(c.x, c.y, (70 + i * 60) * f, (35 + i * 30) * f);
+      }
+    }
+
+    const eg = this.emberG.clear();
+    const { width, height } = this.scale;
+    for (const e of this.embers) {
+      e.y -= e.v * dt;
+      if (e.y < -0.05) {
+        e.y = 1.05;
+        e.x = Math.random();
+      }
+      const x = (e.x + 0.02 * Math.sin(now / 900 + e.seed)) * width;
+      const y = e.y * height;
+      const a = 0.35 + 0.35 * Math.sin(now / 260 + e.seed * 3);
+      eg.fillStyle(0xff6a20, a * 0.35);
+      eg.fillCircle(x, y, 3.5);
+      eg.fillStyle(0xffc060, a);
+      eg.fillCircle(x, y, 1.2);
     }
   }
 
@@ -691,6 +765,7 @@ export class GameScene extends Phaser.Scene {
     fx.clear();
     const player = this.player;
     const now = this.time.now;
+    this.drawAtmosphere(now, this.game.loop.delta / 1000);
 
     // Telegrafi dei nemici
     for (const e of this.enemies) {
@@ -756,15 +831,19 @@ export class GameScene extends Phaser.Scene {
 
     // Giocatore
     const dodging = player.state === 'dodge';
-    this.drawActor(this.playerG, player.x, player.y, {
-      color: player.state === 'dead' ? 0x444444 : 0x4a86c8,
+    this.actor(this.playerG, player, {
+      kind: 'hero',
+      color: 0x3f7fd0,
       facing: player.facing,
       scale: 1,
       alpha: player.invulnerable ? 0.45 : 1,
       flash: player.hurtFlash > 0,
-      squash: dodging ? 0.6 : player.state === 'dead' ? 0.3 : 1,
+      squash: dodging ? 0.6 : 1,
       weapon: player.state === 'attack' || player.state === 'skill' ? 30 : 18,
+      dead: player.state === 'dead',
     });
+
+    this.fadeWalls();
 
     // Sagoma del giocatore sempre visibile, anche dietro ai muri.
     const gg = this.ghostG.clear();
@@ -786,13 +865,15 @@ export class GameScene extends Phaser.Scene {
           g.setVisible(false);
           continue;
         }
-        this.drawActor(g, e.x, e.y, {
-          color: 0x555555, facing: e.facing, scale: e.def.scale, alpha: fade, flash: false, squash: 0.3, weapon: 0,
+        this.actor(g, e, {
+          kind: isBoss ? 'boss' : (e.def.id as ActorKind), color: e.def.color, facing: e.facing, scale: e.def.scale,
+          alpha: fade, flash: false, squash: 1, weapon: 0, dead: true,
         });
         continue;
       }
       const winding = e.state === 'windup' || e.state === 'transition';
-      this.drawActor(g, e.x, e.y, {
+      this.actor(g, e, {
+        kind: isBoss ? 'boss' : (e.def.id as ActorKind),
         color: isBoss ? e.color : e.def.color,
         facing: e.facing,
         scale: e.def.scale,
@@ -800,7 +881,6 @@ export class GameScene extends Phaser.Scene {
         flash: e.hurtFlash > 0 || (e.state === 'transition' && Math.floor(now / 80) % 2 === 0),
         squash: winding ? 1.08 : 1,
         weapon: e.def.ranged ? 0 : e.state === 'strike' ? 32 : winding ? 10 : 18,
-        bow: !!e.def.ranged,
         hpFrac: !isBoss && e.hp < e.def.maxHp ? e.hp / e.def.maxHp : undefined,
       });
     }
@@ -817,6 +897,26 @@ export class GameScene extends Phaser.Scene {
       ? { name: this.boss.bossDef.title, frac: this.boss.hp / this.boss.maxHp }
       : null;
     this.hud.draw(player, alive > 0 ? `Nemici: ${alive}` : 'Area ripulita', prompt, deathAlpha, boss);
+  }
+
+  /** Rende semitrasparenti i muri che stanno davanti al giocatore e lo coprono. */
+  private fadeWalls(): void {
+    const s = toScreen(this.player.x, this.player.y);
+    const hw = TILE_W / 2;
+    const k = 1 - Math.exp(-14 * (this.game.loop.delta / 1000));
+    for (const wl of this.wallG) {
+      // Davanti = più in basso a schermo; copre = il suo riquadro tocca il corpo (largo ~20, alto ~46).
+      const covers =
+        wl.g.depth > s.y &&
+        Math.abs(wl.x - s.x) < hw + 10 &&
+        wl.top < s.y &&
+        wl.bottom > s.y - 46;
+      const target = covers ? WALL_FADE_ALPHA : 1;
+      if (wl.alpha === target) continue;
+      wl.alpha += (target - wl.alpha) * k;
+      if (Math.abs(wl.alpha - target) < 0.01) wl.alpha = target;
+      wl.g.setAlpha(wl.alpha);
+    }
   }
 
   private drawTelegraph(t: Telegraph): void {
@@ -856,16 +956,23 @@ export class GameScene extends Phaser.Scene {
     const flick = Math.sin(now / 90) * 2;
     this.level.bonfires.forEach((_, i) => {
       const g = this.propG.get(`bonfire${i}`)!.clear();
-      g.fillStyle(0xff8a20, 0.12);
-      g.fillEllipse(0, 0, 90, 45);
-      g.fillStyle(0x3a2a1c, 1);
-      g.fillEllipse(0, 0, 26, 12);
-      g.fillStyle(0xe8632a, 1);
-      g.fillTriangle(-8, 0, 8, 0, flick, -24 - flick);
-      g.fillStyle(0xffc23a, 1);
-      g.fillTriangle(-4, 0, 4, 0, -flick * 0.5, -13);
-      g.lineStyle(2, 0x9a9a9a, 1);
-      g.lineBetween(0, 0, 3, -34);
+      // Cerchio di pietre annerite, braci, la spada conficcata e la fiamma.
+      g.fillStyle(0x000000, 0.4);
+      g.fillEllipse(0, 1, 40, 18);
+      g.fillStyle(0x3a302e, 1);
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        g.fillEllipse(Math.cos(a) * 16, Math.sin(a) * 7, 9, 6);
+      }
+      g.fillStyle(0x8a2410, 1);
+      g.fillEllipse(0, 0, 22, 9);
+      g.lineStyle(2.5, 0xa8a8b4, 1);
+      g.lineBetween(1, -2, 4, -38);
+      g.lineStyle(2.5, 0x6a5030, 1);
+      g.lineBetween(-2, -30, 9, -31);
+      drawFlame(g, -5, 0, 20, now, 1 + i);
+      drawFlame(g, 6, 1, 17, now, 4 + i);
+      drawFlame(g, 0, 2, 28 + flick, now, i);
     });
 
     for (const c of this.level.chests) {
@@ -873,9 +980,12 @@ export class GameScene extends Phaser.Scene {
       const open = this.world.openedChests.includes(c.id);
       g.fillStyle(0x000000, 0.35);
       g.fillEllipse(0, 2, 34, 14);
-      g.fillStyle(0x5a3a1e, 1);
+      g.fillStyle(0x3e2416, 1);
       g.fillRect(-14, -16, 28, 16);
-      g.fillStyle(open ? 0x2a1a0e : 0x7a5228, 1);
+      g.fillStyle(0x2a2a30, 1);
+      g.fillRect(-14, -16, 3, 16);
+      g.fillRect(11, -16, 3, 16);
+      g.fillStyle(open ? 0x1c100a : 0x5a3620, 1);
       if (open) g.fillRect(-14, -26, 28, 8);
       else g.fillRect(-15, -22, 30, 8);
       g.fillStyle(0xc8a050, 1);
@@ -891,11 +1001,10 @@ export class GameScene extends Phaser.Scene {
       const made = this.world.choices[c.id];
       if (c.id === '1') {
         // Pellegrino incatenato (resta se lo hai derubato)
-        g.lineStyle(2, 0x8a8a8a, 1);
-        g.lineBetween(-10, -30, -16, -46);
-        g.lineBetween(10, -30, 16, -46);
-        if (made === 'light') continue;
-        this.figure(g, 0x9a8a70, 0.6);
+        if (made !== 'light') this.figure(g, 'pilgrim', 0x8a7a5c, 0.62, false);
+        g.lineStyle(2, 0x6e6e78, 1);
+        g.lineBetween(-10, -22, -18, -48);
+        g.lineBetween(10, -22, 18, -48);
       } else if (c.id === '2') {
         // Altare con la coppa
         g.fillStyle(0x000000, 0.35);
@@ -912,7 +1021,7 @@ export class GameScene extends Phaser.Scene {
       } else if (c.id === '3') {
         // Disertore in ginocchio; cadavere se lo hai finito
         if (made === 'light') continue;
-        this.figure(g, made === 'dark' ? 0x555555 : 0xb86b4b, made === 'dark' ? 0.25 : 0.65);
+        this.figure(g, 'predone', ENEMIES.predone.color, 0.65, made === 'dark');
         if (!made) {
           g.lineStyle(3, 0xd9d9e0, 1);
           g.lineBetween(12, -2, 30, 4);
@@ -921,14 +1030,10 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private figure(g: Gfx, color: number, squash: number): void {
-    const h = 30 * squash;
-    g.fillStyle(0x000000, 0.35);
-    g.fillEllipse(0, 0, 30, 14);
-    g.fillStyle(color, 1);
-    g.fillRoundedRect(-9, -h - 2, 18, h, 6);
-    g.fillStyle(0xe2c9a6, 1);
-    g.fillCircle(0, -h - 8, 7);
+  /** Figura ferma di una scena (prigioniero, disertore): stessa grafica dei personaggi. */
+  private figure(g: Gfx, kind: ActorKind, color: number, squash: number, dead: boolean): void {
+    const { x, y } = g;
+    drawActor(g, x, y, { kind, color, facing: Math.PI / 4, scale: 1, alpha: 1, flash: false, squash, weapon: 0, dead });
   }
 
   private drawGate(now: number): void {
@@ -940,8 +1045,8 @@ export class GameScene extends Phaser.Scene {
       // Velo di nebbia lungo il tile (asse x del mondo), alto come un muro.
       const ex = TILE_W / 4;
       const ey = TILE_H / 4;
-      const a = (closed ? 0.55 : 0.28) + 0.06 * Math.sin(now / 400);
-      g.fillStyle(0xd8dce8, a);
+      const a = (closed ? 0.6 : 0.3) + 0.06 * Math.sin(now / 400);
+      g.fillStyle(0xc02a10, a * 0.7);
       g.fillPoints(
         [
           { x: -ex, y: -ey }, { x: ex, y: ey },
@@ -949,6 +1054,11 @@ export class GameScene extends Phaser.Scene {
         ],
         true,
       );
+      // Lingue di fuoco lungo il velo.
+      g.setAlpha(Math.min(1, a + 0.3));
+      const seed = g.x * 0.13 + g.y * 0.07;
+      drawFlame(g, -ex * 0.5, -ey * 0.5, closed ? 46 : 30, now, seed);
+      drawFlame(g, ex * 0.5, ey * 0.5, closed ? 40 : 26, now, seed + 2.3);
     }
   }
 
@@ -976,49 +1086,9 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private drawActor(
-    g: Gfx,
-    wx: number,
-    wy: number,
-    o: {
-      color: number; facing: number; scale: number; alpha: number; flash: boolean; squash: number; weapon: number;
-      bow?: boolean; hpFrac?: number;
-    },
-  ): void {
-    const s = toScreen(wx, wy);
-    const k = o.scale;
-    const bodyH = 30 * k * o.squash;
-    const color = o.flash ? 0xffffff : o.color;
-    g.clear().setVisible(true).setPosition(s.x, s.y).setDepth(s.y).setAlpha(o.alpha);
-
-    g.fillStyle(0x000000, 0.35);
-    g.fillEllipse(0, 0, 30 * k, 14 * k);
-
-    g.fillStyle(color, 1);
-    g.fillRoundedRect(-9 * k, -bodyH - 2, 18 * k, bodyH, 6 * k);
-    g.fillStyle(o.flash ? 0xffffff : 0xe2c9a6, 1);
-    g.fillCircle(0, -bodyH - 8 * k, 7 * k);
-
-    const d = worldAngleToScreenDir(o.facing);
-    const oy = -bodyH * 0.55;
-    if (o.bow) {
-      g.lineStyle(2.5 * k, 0x8a6a3a, 1);
-      g.beginPath();
-      g.arc(d.x * 10 * k, oy + d.y * 10 * k, 10 * k, Math.atan2(d.y, d.x) - 1.2, Math.atan2(d.y, d.x) + 1.2);
-      g.strokePath();
-    } else if (o.weapon > 0) {
-      g.lineStyle(3 * k, 0xd9d9e0, 1);
-      g.lineBetween(d.x * 8 * k, oy + d.y * 8 * k, d.x * (8 + o.weapon) * k, oy + d.y * (8 + o.weapon) * k);
-    }
-
-    if (o.hpFrac !== undefined) {
-      const w = 36 * k;
-      const y = -bodyH - 24 * k;
-      g.fillStyle(0x000000, 0.8);
-      g.fillRect(-w / 2 - 1, y - 1, w + 2, 6);
-      g.fillStyle(0xb02a2a, 1);
-      g.fillRect(-w / 2, y, w * o.hpFrac, 4);
-    }
+  private actor(g: Gfx, a: { x: number; y: number }, o: Omit<Parameters<typeof drawActor>[3], 'walk'>): void {
+    const s = toScreen(a.x, a.y);
+    drawActor(g, s.x, s.y, { ...o, walk: o.dead ? undefined : this.walkOf(a) });
   }
 
   private floatText(wx: number, wy: number, text: string, color: string): void {

@@ -53,7 +53,7 @@ export interface TreeConfig {
   sideNames: Record<Side, string>;
   /** Punti GUADAGNATI (non il saldo) necessari per accedere a ogni livello del ramo. */
   tierThreshold: Record<Tier, number>;
-  /** Se true, imparare un talento di un ramo blocca l'altro fino al respec. */
+  /** Se true, il primo talento imparato blocca per sempre l'altro ramo: nessun percorso neutro o ibrido. */
   exclusive: boolean;
 }
 
@@ -92,7 +92,7 @@ export class SkillTree {
     const side = this.config.sideNames[n.branch];
     const committed = this.committedBranch();
     if (this.config.exclusive && committed && committed !== n.branch) {
-      return { ok: false, reason: `Hai scelto la via del ${this.config.branchNames[committed]}: fai il respec al falò per cambiare` };
+      return { ok: false, reason: `Hai scelto la via del ${this.config.branchNames[committed]}: l’altra ti è preclusa` };
     }
     const threshold = this.config.tierThreshold[n.tier];
     if (!this.alignment.meetsThreshold(n.branch, threshold)) {

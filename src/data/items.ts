@@ -17,6 +17,25 @@ export interface ItemDef {
   requires?: { side: Side; earned: number };
 }
 
+/** Oggetti chiave: non si equipaggiano, sbloccano qualcosa per sempre una volta raccolti. */
+export interface KeyItemDef {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** L'unico modo di rifare i talenti: si trova solo verso la fine della discesa. */
+export const RESPEC_ITEM = 'acqua_del_lete';
+
+export const KEY_ITEMS: Record<string, KeyItemDef> = {
+  acqua_del_lete: {
+    id: 'acqua_del_lete', name: 'Acqua del Lete',
+    description:
+      'Un’ampolla riempita al fiume dell’oblio. Chi ne beve davanti a un falò dimentica la via che ha scelto, ' +
+      'e può sceglierne un’altra.',
+  },
+};
+
 // Prima area: solo la Spada Lunga (forziere) e il Cuore del Custode (boss).
 // Gli altri oggetti sono pronti per le aree successive.
 export const ITEMS: Record<string, ItemDef> = {
@@ -46,7 +65,7 @@ export const ITEMS: Record<string, ItemDef> = {
   },
   rosario_del_pellegrino: {
     id: 'rosario_del_pellegrino', name: 'Rosario del Pellegrino', slot: 'amuleto',
-    description: 'Grani di legno consumati dalle preghiere.',
+    description: 'Grani di legno consumati dalle preghiere di chi è sceso quaggiù prima di te.',
     bonus: { maxHp: 20 },
   },
   amuleto_strappato: {
@@ -56,7 +75,7 @@ export const ITEMS: Record<string, ItemDef> = {
   },
   cuore_del_custode: {
     id: 'cuore_del_custode', name: 'Cuore del Custode', slot: 'amuleto',
-    description: 'Batte ancora, piano. Il Custode ha vegliato su queste sale per secoli.',
+    description: 'Batte ancora, piano. Il Custode ha vegliato sulla soglia degli Inferi per secoli.',
     bonus: { maxHp: 10, damage: 2, stamina: 10 },
   },
 };

@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { ITEMS, SLOTS, SLOT_NAMES, type ItemDef } from '../data/items';
 import type { Player } from '../entities/Player';
+import { FONT, INK, PAINT, backdrop, box, divider, emblazon, frame } from '../ui/theme';
 
 const W = 640;
 const H = 560;
-const FONT = 'Georgia, serif';
+const PAD = 28;
 const LIST_TOP = 196;
 const ROW_H = 30;
 
@@ -46,26 +47,29 @@ export class InventoryScene extends Phaser.Scene {
 
   create(): void {
     const { width, height } = this.scale;
-    this.add.rectangle(0, 0, width, height, 0x06070a, 0.92).setOrigin(0);
-    const scale = Math.min(1, (width - 32) / W, (height - 24) / H);
+    backdrop(this, 0.8);
+    const scale = Math.min(1, (width - 32) / (W + 2 * PAD), (height - 24) / (H + 2 * PAD));
     this.root = this.add.container((width - W * scale) / 2, (height - H * scale) / 2).setScale(scale);
+    const bg = this.add.graphics();
+    frame(bg, -PAD, -PAD, W + 2 * PAD, H + 2 * PAD);
+    divider(bg, W / 2, 38, W - 120);
     this.g = this.add.graphics();
-    this.root.add(this.g);
-    const text = (x: number, y: number, s: string, size: number, color = '#d8d2c4') => {
+    this.root.add([bg, this.g]);
+    const text = (x: number, y: number, s: string, size: number, color = INK.text) => {
       const t = this.add.text(x, y, s, { fontFamily: FONT, fontSize: `${size}px`, color });
       this.root.add(t);
       return t;
     };
 
-    text(W / 2, 0, 'Equipaggiamento', 26).setOrigin(0.5, 0);
+    emblazon(text(W / 2, -4, 'EQUIPAGGIAMENTO', 24).setOrigin(0.5, 0).setLetterSpacing(4));
     SLOTS.forEach((_, i) => this.slotTexts.push(text(20 + i * 210 + 95, 78, '', 13).setOrigin(0.5).setAlign('center')));
-    this.stats = text(W / 2, 128, '', 14, '#b8b2a4').setOrigin(0.5, 0);
-    text(0, 166, 'Oggetti', 16, '#8f897c');
+    this.stats = text(W / 2, 128, '', 14, INK.dim).setOrigin(0.5, 0);
+    text(0, 166, 'Oggetti', 16, INK.dim);
     for (let i = 0; i < 8; i++) this.rows.push(text(14, LIST_TOP + i * ROW_H + 6, '', 15));
-    this.empty = text(14, LIST_TOP + 6, 'Nessun oggetto: cerca i forzieri e ascolta chi incontri.', 15, '#6a665c');
+    this.empty = text(14, LIST_TOP + 6, 'Nessun oggetto: cerca i forzieri e ascolta chi incontri.', 15, INK.faint);
     this.detail = text(0, 452, '', 14).setWordWrapWidth(W).setLineSpacing(4);
     this.status = text(0, 510, '', 14);
-    text(W / 2, 540, 'Frecce scegli · Invio equipaggia / togli · I chiudi', 12, '#8f897c').setOrigin(0.5, 0);
+    text(W / 2, 540, 'Frecce scegli · Invio equipaggia / togli · I chiudi', 12, INK.dim).setOrigin(0.5, 0);
 
     this.input.keyboard!.on('keydown', this.onKey, this);
     this.redraw();
@@ -116,11 +120,8 @@ export class InventoryScene extends Phaser.Scene {
     SLOTS.forEach((slot, i) => {
       const x = 20 + i * 210;
       const id = p.equipped[slot];
-      g.fillStyle(id ? 0x2a2620 : 0x16171c, 1);
-      g.fillRect(x, 50, 190, 56);
-      g.lineStyle(2, id ? 0xc8b070 : 0x34343a, 1);
-      g.strokeRect(x, 50, 190, 56);
-      this.slotTexts[i].setText(`${SLOT_NAMES[slot]}\n${id ? ITEMS[id].name : '—'}`).setColor(id ? '#ece6d6' : '#6a665c');
+      box(g, x, 50, 190, 56, id ? PAINT.slotLit : PAINT.slot, id ? PAINT.goldLit : PAINT.iron);
+      this.slotTexts[i].setText(`${SLOT_NAMES[slot]}\n${id ? ITEMS[id].name : '—'}`).setColor(id ? INK.text : INK.faint);
     });
     this.stats.setText(
       `Vita ${p.maxHp}   ·   Danno ${p.attackDamage}   ·   Difesa ${p.defense}   ·   Stamina ${p.stamina.max}`,
@@ -138,16 +139,13 @@ export class InventoryScene extends Phaser.Scene {
       const ok = p.canEquip(id).ok;
       const y = LIST_TOP + i * ROW_H;
       if (i === this.index) {
-        g.fillStyle(0x2a2a32, 1);
-        g.fillRect(0, y, W, ROW_H - 2);
-        g.lineStyle(2, 0xffffff, 1);
-        g.strokeRect(0, y, W, ROW_H - 2);
+        box(g, 0, y, W, ROW_H - 2, PAINT.slotLit, PAINT.goldLit);
       }
       const mark = p.isEquipped(id) ? '◆ ' : '   ';
       const lock = item.requires && !ok ? `   (serve ${item.requires.side === 'light' ? 'Luce' : 'Oscurità'} ${item.requires.earned})` : '';
       row
         .setText(`${mark}${item.name}  —  ${SLOT_NAMES[item.slot]}${lock}`)
-        .setColor(ok ? (p.isEquipped(id) ? '#f0d878' : '#ece6d6') : '#7a5a5a');
+        .setColor(ok ? (p.isEquipped(id) ? INK.gold : INK.text) : '#7a5a5a');
     });
 
     const id = inv[this.index];
@@ -159,8 +157,8 @@ export class InventoryScene extends Phaser.Scene {
     const item = ITEMS[id];
     this.detail.setText(`${item.name}: ${item.description}\n${bonusText(item)}`);
     const check = p.canEquip(id);
-    if (p.isEquipped(id)) this.status.setText('Equipaggiato · Invio per toglierlo').setColor('#f0d878');
-    else if (check.ok) this.status.setText('Invio per equipaggiarlo').setColor('#7fe08a');
-    else this.status.setText(check.reason).setColor('#e07a6a');
+    if (p.isEquipped(id)) this.status.setText('Equipaggiato · Invio per toglierlo').setColor(INK.gold);
+    else if (check.ok) this.status.setText('Invio per equipaggiarlo').setColor(INK.ok);
+    else this.status.setText(check.reason).setColor(INK.danger);
   }
 }
