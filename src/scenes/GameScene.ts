@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { PLAYER } from '../data/player';
 import { propFrame, type PropName } from '../render/props';
 import { actorFrame, type ActorKind, type Pose } from '../render/sprites';
-import { BACKGROUND, drawFlame, drawFloorTile, drawRitualCircle, drawWallTile, hash } from '../render/terrain';
+import { BACKGROUND, WALL_VARIANTS, buildFloor, hash, wallFrame } from '../render/terrain';
 import { audio } from '../audio/audio';
 import { hitsArc, type AttackEvent, type Telegraph } from '../combat/damage';
 import { projectileHits, spawnProjectiles, stepProjectile, type Projectile } from '../combat/projectiles';
@@ -67,7 +67,7 @@ export class GameScene extends Phaser.Scene {
   private propG = new Map<string, Gfx>();
   private gateG: Gfx[] = [];
   /** Un Graphics per tile di muro, con il riquadro che occupa a schermo. */
-  private wallG: { g: Gfx; x: number; top: number; bottom: number; alpha: number }[] = [];
+  private wallG: { g: Phaser.GameObjects.Image; x: number; top: number; bottom: number; alpha: number }[] = [];
   private fx!: Gfx;
   private projG!: Gfx;
   private hud!: Hud;
@@ -648,31 +648,25 @@ export class GameScene extends Phaser.Scene {
   private drawMap(): void {
     const { w, h, tiles } = this.level.map;
     const hh = TILE_H / 2;
-    const floor = this.add.graphics().setDepth(-1);
     const isWallAt = (x: number, y: number) => x < 0 || y < 0 || x >= w || y >= h || tiles[y * w + x] === WALL;
+    this.lavaTiles = buildFloor(this, this.level);
 
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const c = toScreen(x + 0.5, y + 0.5);
-        if (!isWallAt(x, y)) {
-          const arena = this.level.arena.has(y * w + x);
-          if (drawFloorTile(floor, c.x, c.y, x, y, arena)) this.lavaTiles.push({ x: c.x, y: c.y, seed: hash(x, y, 7) * 6.28 });
-          continue;
-        }
+        if (!isWallAt(x, y)) continue;
         // Solo i muri che confinano con il pavimento: gli altri non si vedono.
         let visible = false;
         for (let dy = -1; dy <= 1 && !visible; dy++) {
           for (let dx = -1; dx <= 1; dx++) if (!isWallAt(x + dx, y + dy)) visible = true;
         }
         if (!visible) continue;
-        // Un Graphics per tile: così i muri che coprono il giocatore sfumano uno per uno.
-        const g = this.add.graphics().setDepth(c.y);
-        const top = c.y - WALL_HEIGHT;
-        this.wallG.push({ g, x: c.x, top: top - hh, bottom: c.y + hh, alpha: 1 });
-        drawWallTile(g, c.x, c.y, x, y, WALL_HEIGHT);
+        // Uno sprite per tile: così i muri che coprono il giocatore sfumano uno per uno.
+        const c = toScreen(x + 0.5, y + 0.5);
+        const f = wallFrame(this, Math.floor(hash(x, y, 5) * WALL_VARIANTS), WALL_HEIGHT);
+        const g = this.add.image(c.x, c.y, f.key).setOrigin(0.5, f.originY).setScale(f.displayScale).setDepth(c.y);
+        this.wallG.push({ g, x: c.x, top: c.y - WALL_HEIGHT - hh, bottom: c.y + hh, alpha: 1 });
       }
     }
-    if (this.level.boss) drawRitualCircle(floor, this.level.boss.x, this.level.boss.y, 4.2);
     for (const gt of this.level.gate) {
       const c = toScreen(gt.tx + 0.5, gt.ty + 0.5);
       this.gateG.push(this.add.graphics().setPosition(c.x, c.y).setDepth(c.y));
@@ -735,6 +729,21 @@ export class GameScene extends Phaser.Scene {
         glow.fillStyle(0xff8a30, 0.07);
         glow.fillEllipse(c.x, c.y, (70 + i * 60) * f, (35 + i * 30) * f);
       }
+    }
+
+    if (!this.world.bossDefeated) {
+      const hot = this.boss?.awake && !this.boss.dead ? 2 : 1;
+      for (const g of this.gateG) {
+        glow.fillStyle(0xff6a20, 0.035 * hot + 0.01 * Math.sin(now / 130 + g.x));
+        glow.fillEllipse(g.x, g.y, 150, 75);
+        glow.fillEllipse(g.x, g.y, 90, 45);
+      }
+    }
+    if (this.lostXp) {
+      const c = toScreen(this.lostXp.x, this.lostXp.y);
+      glow.fillStyle(0x50e0b0, 0.07 + 0.03 * Math.sin(now / 300));
+      glow.fillEllipse(c.x, c.y, 120, 60);
+      glow.fillEllipse(c.x, c.y, 56, 28);
     }
 
     const eg = this.emberG.clear();
@@ -806,18 +815,11 @@ export class GameScene extends Phaser.Scene {
 
     // XP perduti
     const lg = this.lostXpG;
-    lg.clear();
     if (this.lostXp) {
       const c = toScreen(this.lostXp.x, this.lostXp.y);
-      const bob = Math.sin(now / 300) * 3;
       lg.setPosition(c.x, c.y).setDepth(c.y);
-      lg.fillStyle(0x8fe0c0, 0.15);
-      lg.fillEllipse(0, 0, 40, 20);
-      lg.fillStyle(0x8fe0c0, 0.9);
-      lg.fillCircle(0, -18 + bob, 6);
-      lg.fillStyle(0xffffff, 0.9);
-      lg.fillCircle(0, -18 + bob, 2.5);
     }
+    this.prop('lostXp', lg, this.lostXp ? 'soul' : null, Math.floor(now / 100));
 
     // Proiettili (in aria, sopra a tutto)
     const pg = this.projG;
@@ -1026,27 +1028,10 @@ export class GameScene extends Phaser.Scene {
   private drawGate(now: number): void {
     const closed = !!this.boss?.awake && !this.boss.dead;
     const gone = this.world.bossDefeated;
-    for (const g of this.gateG) {
-      g.clear();
-      if (gone) continue;
-      // Velo di nebbia lungo il tile (asse x del mondo), alto come un muro.
-      const ex = TILE_W / 4;
-      const ey = TILE_H / 4;
-      const a = (closed ? 0.6 : 0.3) + 0.06 * Math.sin(now / 400);
-      g.fillStyle(0xc02a10, a * 0.7);
-      g.fillPoints(
-        [
-          { x: -ex, y: -ey }, { x: ex, y: ey },
-          { x: ex, y: ey - WALL_HEIGHT }, { x: -ex, y: -ey - WALL_HEIGHT },
-        ],
-        true,
-      );
-      // Lingue di fuoco lungo il velo.
-      g.setAlpha(Math.min(1, a + 0.3));
-      const seed = g.x * 0.13 + g.y * 0.07;
-      drawFlame(g, -ex * 0.5, -ey * 0.5, closed ? 46 : 30, now, seed);
-      drawFlame(g, ex * 0.5, ey * 0.5, closed ? 40 : 26, now, seed + 2.3);
-    }
+    // Sbarre roventi e muro di fiamme durante lo scontro; prima, solo braci sulla soglia.
+    this.gateG.forEach((g, i) => {
+      this.prop(`gate${i}`, g, gone ? null : closed ? 'gate_closed' : 'gate_open', Math.floor(now / 90) + i * 3);
+    });
   }
 
   /** Disegna a terra un settore circolare definito in coordinate di mondo. */

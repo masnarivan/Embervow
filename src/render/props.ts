@@ -1,7 +1,7 @@
 import type Phaser from 'phaser';
 import { ball, css, glowDot, limb, poly, shade, tone } from './sprites';
 
-// Sprite degli oggetti di scena (falò, forziere, altare, palla di fuoco),
+// Sprite degli oggetti di scena (falò, forziere, altare, palla di fuoco, cancello, anima),
 // dipinti su canvas con lo stesso stile dei personaggi e poi riusati.
 
 type Ctx = CanvasRenderingContext2D;
@@ -9,7 +9,8 @@ type Ctx = CanvasRenderingContext2D;
 export type PropName =
   | 'bonfire' | 'chest_closed' | 'chest_open'
   | 'altar' | 'altar_light' | 'altar_dark'
-  | 'fireball' | 'shackles' | 'dropped_blade';
+  | 'fireball' | 'shackles' | 'dropped_blade'
+  | 'gate_closed' | 'gate_open' | 'soul';
 
 const HALF_W = 44;
 const UP = 70;
@@ -22,6 +23,7 @@ const GOLD = 0xd8a848;
 export const PROP_FRAMES: Record<PropName, number> = {
   bonfire: 8, chest_closed: 1, chest_open: 1, altar: 1, altar_light: 1, altar_dark: 1,
   fireball: 4, shackles: 1, dropped_blade: 1,
+  gate_closed: 8, gate_open: 8, soul: 8,
 };
 
 function shadow(ctx: Ctx, rx: number, y = 1): void {
@@ -296,6 +298,185 @@ function paintDroppedBlade(ctx: Ctx): void {
   line(ctx, { x: 24, y: 4 }, b, 'rgba(190,50,20,0.85)', 1);
 }
 
+/**
+ * Un tile del cancello di fuoco, lungo l'asse x del mondo. Chiuso: sbarre
+ * roventi dentro un muro di fiamme. Aperto: solo la soglia che cova sotto la brace.
+ */
+function paintGate(ctx: Ctx, frame: number, closed: boolean): void {
+  const t = (frame / PROP_FRAMES.gate_closed) * Math.PI * 2;
+  const at = (k: number, z = 0) => ({ x: k * 16, y: k * 8 - z });
+
+  // Bagliore a terra, allungato lungo la soglia.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.rotate(Math.atan2(8, 16));
+  ctx.scale(1, 0.42);
+  const pool = ctx.createRadialGradient(0, 0, 2, 0, 0, 30);
+  pool.addColorStop(0, closed ? 'rgba(255,140,40,0.6)' : 'rgba(255,110,30,0.32)');
+  pool.addColorStop(1, 'rgba(255,90,20,0)');
+  ctx.fillStyle = pool;
+  ctx.beginPath();
+  ctx.arc(0, 0, 30, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Soglia bruciata, con la fessura che arde.
+  line(ctx, at(-1), at(1), '#090405', 5.5);
+  ctx.save();
+  ctx.shadowColor = 'rgba(255,90,20,0.95)';
+  ctx.shadowBlur = 7;
+  line(ctx, at(-1), at(1), '#d8401a', 2.2);
+  ctx.restore();
+  line(ctx, at(-1), at(1), `rgba(255,214,120,${0.75 + 0.2 * Math.sin(t)})`, 0.8);
+
+  const tongues = (n: number, w: number, h: number, vary: number, phase: number, add = true) => {
+    ctx.save();
+    if (add) ctx.globalCompositeOperation = 'lighter';
+    ctx.shadowColor = 'rgba(255,110,30,0.9)';
+    ctx.shadowBlur = 10;
+    for (let i = 0; i < n; i++) {
+      const k = n === 1 ? 0 : -0.82 + (1.64 * i) / (n - 1);
+      const p = at(k);
+      const a = t * (1 + (i % 2)) + i * 1.9 + phase;
+      flame(ctx, p.x, p.y, w, h + vary * Math.sin(a), w * 0.6 * Math.sin(t + i * 2.3 + phase));
+    }
+    ctx.restore();
+  };
+
+  if (!closed) {
+    tongues(4, 3.2, 9, 3.5, 0);
+    const k = (frame / PROP_FRAMES.gate_open + 0.3) % 1;
+    glowDot(ctx, { ...at(0.3, 6 + k * 22), d: 0 }, 0.8 * (1 - k) + 0.2, 0xffa040);
+    return;
+  }
+
+  // Velo rovente alto come un muro.
+  const veil = ctx.createLinearGradient(0, 8, 0, -62);
+  veil.addColorStop(0, 'rgba(255,120,36,0.34)');
+  veil.addColorStop(0.5, 'rgba(190,40,14,0.2)');
+  veil.addColorStop(1, 'rgba(120,10,6,0)');
+  ctx.fillStyle = veil;
+  ctx.beginPath();
+  ctx.moveTo(-16.5, -8.25);
+  ctx.lineTo(16.5, 8.25);
+  ctx.lineTo(16.5, -54);
+  ctx.lineTo(-16.5, -70);
+  ctx.closePath();
+  ctx.fill();
+
+  tongues(4, 5.5, 54, 11, 0, false);
+  tongues(3, 4, 34, 8, 1.2, false);
+
+  // Sbarre di ferro incandescenti: bianche alla base, nere in punta.
+  const hot = ctx.createLinearGradient(0, 8, 0, -58);
+  hot.addColorStop(0, '#ffe08a');
+  hot.addColorStop(0.3, '#f0701c');
+  hot.addColorStop(0.65, '#8a1c10');
+  hot.addColorStop(1, '#2a1214');
+  const bar = (a: { x: number; y: number }, b: { x: number; y: number }, w: number) => {
+    ctx.save();
+    ctx.lineCap = 'butt';
+    ctx.strokeStyle = OUT;
+    ctx.lineWidth = w + 2;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.strokeStyle = hot;
+    ctx.lineWidth = w;
+    ctx.stroke();
+    ctx.restore();
+  };
+  bar(at(-1.03, 37), at(1.03, 37), 2.4);
+  for (const k of [-0.66, 0, 0.66]) {
+    bar(at(k), at(k, 47), 2.8);
+    const tip = at(k, 47);
+    poly(ctx, [{ x: tip.x - 2.8, y: tip.y }, { x: tip.x, y: tip.y - 8 }, { x: tip.x + 2.8, y: tip.y }], '#3a1a1a', 1.6);
+    line(ctx, { x: tip.x - 1.4, y: tip.y - 0.6 }, { x: tip.x - 0.2, y: tip.y - 6 }, 'rgba(255,120,60,0.6)', 0.6);
+  }
+  bar(at(-1.03, 11), at(1.03, 11), 2.4);
+
+  tongues(4, 4, 15, 4, 2.4);
+  for (let i = 0; i < 5; i++) {
+    const k = (frame / PROP_FRAMES.gate_closed + i / 5) % 1;
+    const p = at(Math.sin(i * 2.4) * 0.8, 20 + k * 44);
+    glowDot(ctx, { x: p.x + Math.sin(k * 5 + i) * 2.5, y: p.y, d: 0 }, 0.9 * (1 - k) + 0.2, 0xffa040);
+  }
+}
+
+/** L'anima con gli XP perduti: uno spettro pallido che fluttua sopra un cerchio di luce. */
+function paintSoul(ctx: Ctx, frame: number): void {
+  const t = (frame / PROP_FRAMES.soul) * Math.PI * 2;
+  const cy = -25 + Math.sin(t) * 2.5;
+  const sway = Math.sin(t + 1) * 3;
+
+  // Cerchio di luce a terra, che respira con lei.
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.scale(1, 0.5);
+  const pool = ctx.createRadialGradient(0, 0, 1, 0, 0, 24);
+  pool.addColorStop(0, 'rgba(120,240,200,0.42)');
+  pool.addColorStop(1, 'rgba(60,200,170,0)');
+  ctx.fillStyle = pool;
+  ctx.beginPath();
+  ctx.arc(0, 0, 24, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(170,255,225,0.4)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(0, 0, 14 + Math.sin(t) * 1.5, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Il corpo: testa tonda che si assottiglia in una coda di fumo.
+  const tail = { x: sway, y: -3 };
+  const body = ctx.createRadialGradient(-1, cy - 1, 0.5, 0, cy + 4, 27);
+  body.addColorStop(0, 'rgba(255,255,255,0.98)');
+  body.addColorStop(0.22, 'rgba(190,255,232,0.9)');
+  body.addColorStop(0.6, 'rgba(80,210,178,0.5)');
+  body.addColorStop(1, 'rgba(30,130,120,0)');
+  ctx.save();
+  ctx.shadowColor = 'rgba(110,240,200,0.9)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.moveTo(tail.x, tail.y);
+  ctx.bezierCurveTo(-7 - sway * 0.6, cy + 16, -9, cy + 7, -7.2, cy);
+  ctx.arc(0, cy, 7.2, Math.PI, 0);
+  ctx.bezierCurveTo(9, cy + 7, 5 - sway * 0.6, cy + 16, tail.x, tail.y);
+  ctx.fill();
+  ctx.restore();
+
+  // Fili di luce che salgono dal capo.
+  ctx.lineCap = 'round';
+  for (const s of [-1, 0, 1]) {
+    const h = 11 + 3 * Math.sin(t * 2 + s * 2);
+    ctx.strokeStyle = `rgba(200,255,238,${s === 0 ? 0.6 : 0.4})`;
+    ctx.lineWidth = s === 0 ? 1.5 : 1.1;
+    ctx.beginPath();
+    ctx.moveTo(s * 3.6, cy - 6);
+    ctx.quadraticCurveTo(s * 7 + Math.sin(t + s) * 3, cy - 6 - h * 0.6, s * 3 + Math.sin(t + s + 1) * 2.5, cy - 6 - h);
+    ctx.stroke();
+  }
+
+  // Orbite vuote e bocca: quel che resta di un volto.
+  ctx.fillStyle = 'rgba(6,44,42,0.72)';
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(s * 2.7, cy - 0.6, 1.5, 2.1, s * 0.15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.ellipse(0, cy + 3.8, 1, 1.5 + 0.4 * Math.sin(t), 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Scintille di esperienza in orbita.
+  for (let i = 0; i < 5; i++) {
+    const a = t + (i / 5) * Math.PI * 2;
+    glowDot(ctx, { x: Math.cos(a) * 14, y: cy + 8 + Math.sin(a) * 5 - i * 2.2, d: 0 }, 0.85, 0xa8ffe0);
+  }
+}
+
 export interface PropFrame {
   key: string;
   displayScale: number;
@@ -320,6 +501,9 @@ export function propFrame(scene: Phaser.Scene, name: PropName, frame = 0): PropF
       case 'fireball': paintFireball(ctx, f); break;
       case 'shackles': paintShackles(ctx); break;
       case 'dropped_blade': paintDroppedBlade(ctx); break;
+      case 'gate_closed': paintGate(ctx, f, true); break;
+      case 'gate_open': paintGate(ctx, f, false); break;
+      case 'soul': paintSoul(ctx, f); break;
     }
     tex.refresh();
   }
