@@ -8,7 +8,7 @@ import type Phaser from 'phaser';
 // Lo stile punta al dark fantasy "massiccio": spallacci e mani grandi, armi
 // fuori misura, contorno scuro, luce calda dal basso.
 
-export type ActorKind = 'hero' | 'predone' | 'bruto' | 'arciere' | 'boss' | 'pilgrim';
+export type ActorKind = 'hero' | 'mage' | 'rogue' | 'spettro' | 'predone' | 'bruto' | 'arciere' | 'boss' | 'pilgrim';
 export type Pose = 'idle' | 'walk' | 'windup' | 'strike' | 'dodge' | 'kneel' | 'dead';
 
 const DIRS = 12;
@@ -31,7 +31,7 @@ export function shade(c: number, f: number): number {
 
 export const css = (c: number, a = 1) => `rgba(${(c >> 16) & 255},${(c >> 8) & 255},${c & 255},${a})`;
 
-type Weapon = 'none' | 'sword' | 'cleaver' | 'maul' | 'greatsword' | 'bow';
+type Weapon = 'none' | 'sword' | 'cleaver' | 'maul' | 'greatsword' | 'bow' | 'staff' | 'dagger';
 
 interface Rig {
   /** Carne o corazza del busto e delle braccia. */
@@ -74,6 +74,27 @@ function rigFor(kind: ActorKind, color: number): Rig {
         legLen: 12, legR: 3.1, hipW: 3.6, torsoLen: 14, torsoR: 6.4, shW: 8.2, armR: 2.7, armLen: 12, headR: 6.2,
         lean: 0, pauldron: 5.4, horns: 0, eyes: null, tail: false, wings: false, cape: shade(color, 0.7),
         weapon: 'sword', weaponLen: 25, shield: true,
+      };
+    case 'mage':
+      return {
+        body: color, legs: shade(color, 0.8), head: shade(color, 0.8), hands: 0xd8b890, trim: 0xd8a848,
+        legLen: 12, legR: 3.4, hipW: 3.1, torsoLen: 14, torsoR: 5.8, shW: 6.8, armR: 2.3, armLen: 12, headR: 6,
+        lean: 0.5, pauldron: 0, horns: 0, eyes: null, tail: false, wings: false, cape: null,
+        weapon: 'staff', weaponLen: 27, shield: false,
+      };
+    case 'rogue':
+      return {
+        body: 0x4a3f38, legs: 0x2e2a2c, head: shade(color, 0.7), hands: 0x2a2428, trim: 0x2a2226,
+        legLen: 12, legR: 2.7, hipW: 3.3, torsoLen: 13, torsoR: 5.6, shW: 7, armR: 2.3, armLen: 12, headR: 5.8,
+        lean: 2.2, pauldron: 0, horns: 0, eyes: null, tail: false, wings: false, cape: shade(color, 0.75),
+        weapon: 'dagger', weaponLen: 12, shield: false,
+      };
+    case 'spettro':
+      return {
+        body: color, legs: shade(color, 0.7), head: shade(color, 0.6), hands: shade(color, 1.5), trim: shade(color, 1.4),
+        legLen: 11, legR: 3, hipW: 2.6, torsoLen: 13, torsoR: 5.4, shW: 6.2, armR: 1.9, armLen: 13, headR: 5.6,
+        lean: 3, pauldron: 0, horns: 0, eyes: 0xc8ffe8, tail: false, wings: false, cape: null,
+        weapon: 'none', weaponLen: 0, shield: false,
       };
     case 'pilgrim':
       return {
@@ -248,7 +269,7 @@ function paintFigure(ctx: Ctx, kind: ActorKind, color: number, dir: number, pose
   const shZ = hipZ + R.torsoLen * zs;
   const headZ = shZ + R.headR * 0.9 - (kneel ? 2 : 0);
   const headF = lean * 1.15 + 1 + (kneel ? 2 : 0);
-  const robe = kind === 'pilgrim';
+  const robe = kind === 'pilgrim' || kind === 'mage' || kind === 'spettro';
 
   // Gambe e piedi
   for (const side of [-1, 1]) {
@@ -447,10 +468,31 @@ function paintFigure(ctx: Ctx, kind: ActorKind, color: number, dir: number, pose
       ctx.lineTo(n1.x, n1.y);
       ctx.stroke();
     });
+  } else if (kind === 'rogue') {
+    // Cappuccio calato sul viso, con una maschera scura su bocca e naso.
+    addBall(head, R.headR, R.head);
+    addBall(face(0, 0.52, -0.08), R.headR * 0.6, 0xd8b890, 0.02);
+    addBall(face(0, 0.66, -0.42), R.headR * 0.5, 0x1e1a20, 0.03);
+    addBall(face(0, 0.18, 0.46), R.headR * 0.8, shade(R.head, 0.9), 0.04);
+    addLimb(face(0, -0.5, 0.5), face(0, -1.25, 0.1), R.headR * 0.5, 0.6, shade(R.head, 0.85));
+  } else if (kind === 'spettro') {
+    // Cappuccio vuoto: dentro solo buio e due occhi.
+    addBall(head, R.headR, R.head);
+    addBall(face(0, 0.5, -0.1), R.headR * 0.62, 0x0a1210, 0.02);
+    for (const side of [-1, 1]) {
+      const e = pr(face(side * 0.36, 0.95, -0.05));
+      add(e.d + 0.04, () => glowDot(ctx, e, 1, R.eyes!));
+    }
   } else if (robe) {
     addBall(head, R.headR, R.head);
     addBall(face(0, 0.5, -0.12), R.headR * 0.62, 0xd8b890, 0.02);
     addBall(face(0, 0.2, 0.42), R.headR * 0.78, shade(R.head, 0.9), 0.03);
+    if (kind === 'mage') {
+      // Cappello a punta piegato all'indietro, con la fascia dorata.
+      addLimb(face(0, 0.1, 0.7), face(0, -0.5, 1.75), R.headR * 0.7, R.headR * 0.32, R.body);
+      addLimb(face(0, -0.5, 1.75), face(0, -1.35, 2.3), R.headR * 0.32, 0.5, shade(R.body, 0.85));
+      addBall(face(0, 0.72, 0.72), 1.3, R.trim, 0.04);
+    }
   } else {
     addBall(head, R.headR, R.head);
     if (kind !== 'boss') addBall(face(0, 0.72, -0.38), R.headR * 0.56, shade(R.head, 0.82), 0.01);
@@ -499,6 +541,16 @@ function paintFigure(ctx: Ctx, kind: ActorKind, color: number, dir: number, pose
     const n = { x: nx / nl, y: ny / nl };
     const off = (p: XY, k: number) => ({ x: p.x + n.x * k, y: p.y + n.y * k });
     add(mid.d + 0.015, () => {
+      if (R.weapon === 'staff') {
+        // Bastone nodoso con una gemma accesa in cima: più viva mentre lancia.
+        limb(ctx, along(-9), along(L), 1.25, 1, 0x5a4030);
+        const orb = along(L + 2);
+        limb(ctx, off(along(L - 1), -2.4), off(along(L + 1.5), -1.4), 0.9, 0.5, 0x5a4030);
+        limb(ctx, off(along(L - 1), 2.4), off(along(L + 1.5), 1.4), 0.9, 0.5, 0x5a4030);
+        const lit = pose === 'windup' ? 3 : pose === 'strike' ? 2.6 : 2;
+        glowDot(ctx, { ...orb, d: 0 }, lit, shade(color, 1.75));
+        return;
+      }
       if (R.weapon === 'maul') {
         limb(ctx, p0, along(L * 0.9), 1.5, 1.5, 0x5a4030);
         const h = along(L * 0.92);
@@ -508,8 +560,8 @@ function paintFigure(ctx: Ctx, kind: ActorKind, color: number, dir: number, pose
         limb(ctx, h, along(L + 5), 2, 0.3, BONE);
         return;
       }
-      const wide = R.weapon === 'greatsword' ? 3.6 : R.weapon === 'cleaver' ? 3.2 : 2.1;
-      const steel = R.weapon === 'sword' ? 0xdfe3ee : R.weapon === 'greatsword' ? 0x5a5866 : 0x77707a;
+      const wide = R.weapon === 'greatsword' ? 3.6 : R.weapon === 'cleaver' ? 3.2 : R.weapon === 'dagger' ? 1.6 : 2.1;
+      const steel = R.weapon === 'sword' || R.weapon === 'dagger' ? 0xdfe3ee : R.weapon === 'greatsword' ? 0x5a5866 : 0x77707a;
       limb(ctx, p0, g0, 1.2, 1.2, 0x4a3324);
       const sh = along(L * 0.82);
       const blade =
@@ -541,10 +593,21 @@ function paintFigure(ctx: Ctx, kind: ActorKind, color: number, dir: number, pose
         ctx.lineTo(tip.x, tip.y);
         ctx.stroke();
       }
-      const gw = R.weapon === 'greatsword' ? 6.5 : 4.2;
+      const gw = R.weapon === 'greatsword' ? 6.5 : R.weapon === 'dagger' ? 2.6 : 4.2;
       const gold = R.weapon === 'sword' ? 0xd8a848 : 0x3a3842;
       limb(ctx, off(g0, -gw), off(g0, gw), 1.3, 1.3, gold);
       tone(ctx, p0.x, p0.y, 1.5, gold);
+    });
+  }
+  if (R.weapon === 'dagger' && !kneel) {
+    // Secondo pugnale nell'altra mano, impugnato a rovescio: scatta in avanti quando colpisce.
+    const d2 = pose === 'strike' ? v(0.2, 0.95, 0.1) : pose === 'windup' ? v(-0.3, -0.3, 0.9) : v(-0.1, 0.75, -0.55);
+    const at = (t: number) => pr(v(oHand.s + d2.s * t, oHand.f + d2.f * t, oHand.z + d2.z * t));
+    const a = at(1.5);
+    const b = at(R.weaponLen * 0.9);
+    add((a.d + b.d) / 2 + 0.015, () => {
+      limb(ctx, at(-2.5), a, 1.1, 1.1, 0x3a3842);
+      limb(ctx, a, b, 1.5, 0.3, 0xdfe3ee);
     });
   }
   if (R.weapon === 'bow') {

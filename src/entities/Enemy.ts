@@ -14,6 +14,8 @@ export interface Target {
   y: number;
   radius: number;
   state: string;
+  /** Furtivo: i nemici non lo vedono e smettono di inseguirlo. */
+  hidden?: boolean;
 }
 
 /** Nemico con macchina a stati: idle → chase → windup → strike → recover. */
@@ -74,6 +76,13 @@ export class Enemy {
     this.setState('stagger');
   }
 
+  /** Danno nel tempo (veleno): toglie vita senza stordire né interrompere. */
+  erode(amount: number): void {
+    if (this.dead) return;
+    this.hp = Math.max(0, this.hp - amount);
+    if (this.hp <= 0) this.setState('dead');
+  }
+
   /** Area del colpo in arrivo, o null se non sta attaccando. */
   telegraph(): Telegraph | null {
     const def = this.def;
@@ -95,7 +104,7 @@ export class Enemy {
     const dx = target.x - this.x;
     const dy = target.y - this.y;
     const dist = Math.hypot(dx, dy);
-    const targetAlive = target.state !== 'dead';
+    const targetAlive = target.state !== 'dead' && !target.hidden;
 
     switch (this.state) {
       case 'idle': {

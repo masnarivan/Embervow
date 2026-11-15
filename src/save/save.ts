@@ -39,6 +39,7 @@ export function parseSave(raw: unknown): SaveData | null {
   if (!isObj(p) || !isObj(w)) return null;
   if (!isNum(p.level) || !isNum(p.xp) || !isStrArr(p.talents) || !isStrArr(p.inventory) || !isObj(p.equipped)) return null;
   if (p.keyItems !== undefined && !isStrArr(p.keyItems)) return null;
+  if (p.cls !== undefined && typeof p.cls !== 'string') return null;
   if (!isObj(p.alignment) || !isSides(p.alignment.earned) || !isSides(p.alignment.spent)) return null;
   if (!isObj(w.choices) || !isStrArr(w.openedChests) || typeof w.bossDefeated !== 'boolean' || !isNum(w.lastBonfire)) {
     return null;

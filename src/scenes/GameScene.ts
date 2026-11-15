@@ -1,23 +1,24 @@
 import Phaser from 'phaser';
-import { PLAYER } from '../data/player';
 import { propFrame, type PropName } from '../render/props';
 import { actorFrame, type ActorKind, type Pose } from '../render/sprites';
 import { BACKGROUND, WALL_VARIANTS, buildFloor, hash, wallFrame } from '../render/terrain';
 import { audio } from '../audio/audio';
-import { hitsArc, type AttackEvent, type Telegraph } from '../combat/damage';
+import { hitsArc, isBackstab, type AttackEvent, type Telegraph } from '../combat/damage';
 import { projectileHits, spawnProjectiles, stepProjectile, type Projectile } from '../combat/projectiles';
 import { canKeep, cycleTarget, pickTarget } from '../combat/targeting';
 import { TILE_H, TILE_W, screenDirToWorld, toScreen, type Vec2 } from '../core/iso';
 import { insideArena, parseLevel, setGate, type Level } from '../core/level';
-import { WALL, hasLineOfSight } from '../core/map';
+import { WALL, collides, hasLineOfSight } from '../core/map';
 import { newWorld, type WorldState } from '../core/world';
 import { CUSTODE } from '../data/boss';
 import { CHOICES } from '../data/choices';
+import { classById } from '../data/classes';
 import { ENEMIES } from '../data/enemies';
 import { ITEMS } from '../data/items';
 import { LEVEL1_CHESTS, LEVEL1_ROWS } from '../data/level1';
 import { Boss } from '../entities/Boss';
 import { Enemy } from '../entities/Enemy';
+import { Minion } from '../entities/Minion';
 import { Player, type PlayerInput } from '../entities/Player';
 import { Hud } from '../ui/Hud';
 import { makeSave, saveStore, type SaveData } from '../save/save';
@@ -42,6 +43,12 @@ const RESPAWN_DELAY = 2.6;
 const INTERACT_RANGE = 1.4;
 /** Salvataggio automatico periodico, oltre a quelli su falò, scelte, forzieri e boss. */
 const AUTOSAVE_EVERY = 15;
+const SPECTRE_COLOR = 0x4fa890;
+/** Ogni quanto il veleno toglie vita (secondi). */
+const POISON_TICK = 0.5;
+
+/** Ciò che un colpo porta con sé quando ferisce un nemico. */
+type Hit = Pick<AttackEvent, 'damage' | 'breakPoise' | 'lifesteal' | 'backstab' | 'poison'>;
 
 interface Spark {
   x: number;
@@ -59,6 +66,15 @@ export class GameScene extends Phaser.Scene {
   enemies: Enemy[] = [];
   boss: Boss | null = null;
   projectiles: Projectile[] = [];
+  /** Dardi e incantesimi lanciati dal giocatore. */
+  playerShots: Projectile[] = [];
+  /** Spettri evocati, alleati a tempo. */
+  minions: Minion[] = [];
+  /** Esplosioni appena avvenute, solo da disegnare. */
+  private blasts: { x: number; y: number; range: number; color: number; timeLeft: number }[] = [];
+  private pendingCls: string | undefined;
+  /** Veleni in corso: danno al secondo e tempo rimasto per nemico. */
+  private poisons = new Map<Enemy, { dps: number; timeLeft: number; acc: number; tick: number }>();
 
   /** Uno sprite per personaggio (o figura di scena), creato al primo disegno. */
   private sprites = new Map<unknown, Phaser.GameObjects.Image>();
@@ -111,8 +127,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   /** La scena viene riavviata tornando dal titolo: ogni stato va azzerato qui. */
-  init(data: { save?: SaveData | null }): void {
+  init(data: { save?: SaveData | null; cls?: string }): void {
     this.pendingSave = data?.save ?? null;
+    this.pendingCls = data?.cls;
+    this.playerShots = [];
+    this.minions = [];
+    this.blasts = [];
+    this.poisons = new Map();
     this.sprites = new Map();
     this.shots = [];
     this.propG = new Map();
@@ -154,7 +175,8 @@ export class GameScene extends Phaser.Scene {
     this.projG = this.add.graphics().setDepth(80000);
     this.lostXpG = this.add.graphics();
     this.createProps();
-    this.player = new Player(this.level.start.x, this.level.start.y);
+    const cls = classById(save ? save.player.cls : this.pendingCls);
+    this.player = new Player(this.level.start.x, this.level.start.y, cls);
     this.ghost = this.add.image(0, 0, '__DEFAULT').setDepth(85000).setAlpha(0.14).setTintFill(0x9fd0ff).setVisible(false);
     if (save) {
       // Si riparte dall'ultimo falò, come dopo una morte.
@@ -265,12 +287,16 @@ export class GameScene extends Phaser.Scene {
 
     const swing = player.update(dt, input, this.level.map);
     if (player.state !== this.prevPlayerState) {
-      if (player.state === 'attack') audio.play('swing');
+      if (player.state === 'attack') audio.play(player.cls.attack.projectile ? 'shoot' : 'swing');
       else if (player.state === 'skill') audio.play('skill');
       else if (player.state === 'dodge') audio.play('dodge');
       this.prevPlayerState = player.state;
     }
     if (swing) this.resolvePlayerAttack(swing);
+    for (const s of player.takeSummons()) this.summon(s);
+    this.updateMinions(dt);
+    this.updatePlayerShots(dt);
+    this.updatePoisons(dt);
 
     for (const e of this.enemies) {
       const strike = e.update(dt, player, this.level.map);
@@ -411,22 +437,171 @@ export class GameScene extends Phaser.Scene {
   }
 
   private resolvePlayerAttack(swing: AttackEvent): void {
+    if (swing.projectile) {
+      this.playerShots.push(...spawnProjectiles(swing));
+      return;
+    }
+    this.strikeEnemies(swing);
+  }
+
+  /** Nemici che un colpo del giocatore (o di un suo alleato) può ferire in questo momento. */
+  private hittable(): Enemy[] {
+    return this.enemies.filter((e) => !e.dead && (!(e instanceof Boss) || (e.awake && e.state !== 'transition')));
+  }
+
+  /** Applica un colpo ad arco a tutti i nemici che tocca. `heavy`: con contraccolpo a schermo. */
+  private strikeEnemies(ev: AttackEvent, heavy = true): boolean {
     let hitAny = false;
-    for (const e of this.targetable()) {
-      if (e.dead || !hitsArc(swing, e.x, e.y, e.radius)) continue;
-      if (e instanceof Boss && e.state === 'transition') continue;
-      e.takeDamage(swing.damage, swing.angle, swing.breakPoise);
-      this.floatText(e.x, e.y, `${swing.damage}`, '#f2e6b0');
-      this.burst(e.x, e.y, 0xffe0a0, e.dead ? 14 : 6);
-      this.player.onHitLanded(swing.damage, swing.lifesteal);
-      if (e.dead) this.grantXp(e.def.xp);
+    for (const e of this.hittable()) {
+      if (!hitsArc(ev, e.x, e.y, e.radius) || !hasLineOfSight(this.level.map, ev.x, ev.y, e.x, e.y)) continue;
+      // Direzione da cui arriva il colpo: decide se è alle spalle.
+      const near = Math.hypot(e.x - ev.x, e.y - ev.y) < 0.05;
+      this.damageEnemy(e, ev, ev.angle, near ? ev.angle : Math.atan2(e.y - ev.y, e.x - ev.x));
       hitAny = true;
     }
-    if (hitAny) {
-      audio.play('hit');
-      this.hitStop = 0.05;
-      this.cameras.main.shake(70, 0.003);
+    if (hitAny) this.hitFeedback(heavy);
+    return hitAny;
+  }
+
+  /** `knock`: direzione della spinta; `from`: direzione di arrivo del colpo, per i colpi alle spalle. */
+  private damageEnemy(e: Enemy, hit: Hit, knock: number, from = knock): void {
+    const back = !!hit.backstab && isBackstab(from, e.facing);
+    const damage = back ? Math.round(hit.damage * hit.backstab!) : hit.damage;
+    e.takeDamage(damage, knock, hit.breakPoise);
+    this.floatText(e.x, e.y, back ? `${damage}!` : `${damage}`, back ? '#ffb040' : '#f2e6b0');
+    this.burst(e.x, e.y, back ? 0xff9a30 : 0xffe0a0, e.dead ? 14 : back ? 10 : 6);
+    this.player.onHitLanded(damage, hit.lifesteal);
+    if (hit.poison && !e.dead) this.poison(e, hit.poison.damage, hit.poison.duration);
+    if (e.dead) this.onEnemyKilled(e);
+  }
+
+  private onEnemyKilled(e: Enemy): void {
+    this.poisons.delete(e);
+    this.player.onKill();
+    this.grantXp(e.def.xp);
+  }
+
+  // ---------- Veleno ----------
+
+  /** Aggiunge veleno a un nemico: il danno nuovo si somma a quello ancora da scontare. */
+  private poison(e: Enemy, damage: number, duration: number): void {
+    const cur = this.poisons.get(e);
+    const left = cur ? cur.dps * cur.timeLeft : 0;
+    const time = Math.max(duration, cur?.timeLeft ?? 0);
+    this.poisons.set(e, { dps: (left + damage) / time, timeLeft: time, acc: cur?.acc ?? 0, tick: cur?.tick ?? POISON_TICK });
+  }
+
+  private updatePoisons(dt: number): void {
+    for (const [e, p] of this.poisons) {
+      if (e.dead) {
+        this.poisons.delete(e);
+        continue;
+      }
+      // Il boss che cambia fase è intoccabile: il veleno aspetta.
+      if (e instanceof Boss && e.state === 'transition') continue;
+      const step = Math.min(dt, p.timeLeft);
+      p.acc += p.dps * step;
+      p.timeLeft -= step;
+      p.tick -= dt;
+      const over = p.timeLeft <= 0;
+      if (p.tick > 0 && !over) continue;
+      p.tick = POISON_TICK;
+      const dmg = over ? Math.round(p.acc) : Math.floor(p.acc);
+      p.acc -= dmg;
+      if (over) this.poisons.delete(e);
+      if (dmg <= 0) continue;
+      e.erode(dmg);
+      this.floatText(e.x + 0.3, e.y - 0.3, `${dmg}`, '#8fe060');
+      if (e.dead) {
+        this.burst(e.x, e.y, 0x8fe060, 12);
+        this.onEnemyKilled(e);
+      }
     }
+  }
+
+  private hitFeedback(heavy: boolean): void {
+    audio.play('hit');
+    if (!heavy) return;
+    this.hitStop = 0.05;
+    this.cameras.main.shake(70, 0.003);
+  }
+
+  /** Dardi del giocatore: colpiscono il primo nemico, lo trapassano o esplodono. */
+  private updatePlayerShots(dt: number): void {
+    const map = this.level.map;
+    this.playerShots = this.playerShots.filter((pr) => {
+      const alive = stepProjectile(pr, dt, map);
+      if (!alive) {
+        // A fine corsa o contro un muro: le palle di fuoco esplodono comunque.
+        if (pr.explode) this.explode(pr, pr.x - pr.vx * dt, pr.y - pr.vy * dt);
+        return false;
+      }
+      const angle = Math.atan2(pr.vy, pr.vx);
+      for (const e of this.hittable()) {
+        if (pr.hit?.has(e) || !projectileHits(pr, e.x, e.y, e.radius)) continue;
+        if (pr.explode) {
+          this.explode(pr, pr.x, pr.y);
+          return false;
+        }
+        this.damageEnemy(e, pr, angle);
+        this.hitFeedback(!!pr.breakPoise);
+        if (!pr.pierce) return false;
+        (pr.hit ??= new Set()).add(e);
+      }
+      return true;
+    });
+  }
+
+  private explode(pr: Projectile, x: number, y: number): void {
+    const color = pr.color ?? 0xff8a30;
+    this.blasts.push({ x, y, range: pr.explode!, color, timeLeft: 0.22 });
+    this.burst(x, y, color, 16);
+    const hit = this.strikeEnemies({
+      x, y, angle: Math.atan2(pr.vy, pr.vx), range: pr.explode!, halfArc: Math.PI, damage: pr.damage,
+      breakPoise: pr.breakPoise, lifesteal: pr.lifesteal,
+    });
+    if (!hit) audio.play('hit', this.loudness({ x, y }) * 0.6);
+  }
+
+  // ---------- Spettri evocati ----------
+
+  private summon(req: { count: number; duration: number; damageMult: number }): void {
+    const p = this.player;
+    const damage = Math.max(1, Math.round(p.attackDamage * req.damageMult));
+    for (let i = 0; i < req.count; i++) {
+      // Ai lati del giocatore; se lì c'è un muro, sopra di lui.
+      const a = p.facing + Math.PI / 2 + (i * Math.PI * 2) / req.count;
+      let x = p.x + Math.cos(a) * 0.9;
+      let y = p.y + Math.sin(a) * 0.9;
+      if (collides(this.level.map, x, y, 0.3)) {
+        x = p.x;
+        y = p.y;
+      }
+      this.minions.push(new Minion(x, y, req.duration, damage));
+      this.burst(x, y, 0x7fe0b0, 10);
+    }
+  }
+
+  private updateMinions(dt: number): void {
+    const targets = this.hittable();
+    this.minions = this.minions.filter((m) => {
+      const strike = m.update(dt, this.player, targets, this.level.map);
+      if (strike) this.strikeEnemies(strike, false);
+      if (!m.expired) return true;
+      this.burst(m.x, m.y, 0x7fe0b0, 8);
+      this.dropSprite(m);
+      return false;
+    });
+  }
+
+  private clearMinions(): void {
+    for (const m of this.minions) this.dropSprite(m);
+    this.minions = [];
+  }
+
+  private dropSprite(key: unknown): void {
+    this.sprites.get(key)?.destroy();
+    this.sprites.delete(key);
   }
 
   /** I corpi vivi non si sovrappongono: i nemici si spingono tra loro e via dal giocatore. */
@@ -449,7 +624,8 @@ export class GameScene extends Phaser.Scene {
         }
       }
       const p = this.player;
-      if (p.state === 'dead' || p.state === 'dodge') continue;
+      // Rotolando o traslando si passa attraverso i nemici senza spostarli.
+      if (p.state === 'dead' || p.state === 'dodge' || p.invulnerable) continue;
       const dx = a.x - p.x;
       const dy = a.y - p.y;
       const d = Math.hypot(dx, dy) || 0.001;
@@ -616,6 +792,8 @@ export class GameScene extends Phaser.Scene {
     this.player.reset(x, y);
     this.deathTime = 0;
     this.projectiles = [];
+    this.playerShots = [];
+    this.clearMinions();
     setGate(this.level, false);
     this.spawnEnemies();
     audio.music('explore');
@@ -627,6 +805,7 @@ export class GameScene extends Phaser.Scene {
       this.sprites.get(e)?.destroy();
       this.sprites.delete(e);
     }
+    this.poisons.clear();
     this.enemies = this.level.enemies.map((s) => new Enemy(ENEMIES[s.type], s.x, s.y));
     const b = this.level.boss;
     this.boss = b && !this.world.bossDefeated ? new Boss(CUSTODE, b.x, b.y) : null;
@@ -837,16 +1016,52 @@ export class GameScene extends Phaser.Scene {
     });
     for (let i = this.projectiles.length; i < this.shots.length; i++) this.shots[i].setVisible(false);
 
+    // Dardi del giocatore: una scia e un nucleo chiaro.
+    for (const pr of this.playerShots) {
+      const c = toScreen(pr.x, pr.y);
+      const v = toScreen(pr.vx, pr.vy);
+      const vl = Math.hypot(v.x, v.y) || 1;
+      const k = pr.radius / 0.15;
+      const color = pr.color ?? 0xa98cff;
+      for (let i = 4; i >= 1; i--) {
+        pg.fillStyle(color, 0.16);
+        pg.fillCircle(c.x - (v.x / vl) * i * 6 * k, c.y - 22 - (v.y / vl) * i * 6 * k, (6.5 - i) * k);
+      }
+      pg.fillStyle(color, 0.3);
+      pg.fillCircle(c.x, c.y - 22, 9 * k + Math.sin(now / 40) * 0.8);
+      pg.fillStyle(color, 0.9);
+      pg.fillCircle(c.x, c.y - 22, 5 * k);
+      pg.fillStyle(0xffffff, 0.95);
+      pg.fillCircle(c.x, c.y - 22, 2.4 * k);
+    }
+
+    // Esplosioni a terra
+    const frameDt = this.game.loop.delta / 1000;
+    this.blasts = this.blasts.filter((b) => (b.timeLeft -= frameDt) > 0);
+    for (const b of this.blasts) {
+      const t = 1 - b.timeLeft / 0.22;
+      this.sector(b.x, b.y, 0, b.range * (0.5 + 0.5 * t), Math.PI, b.color, 0.55 * (1 - t), true);
+    }
+
+    // Spettri: tenui, svaniscono all'inizio e alla fine della loro vita.
+    for (const m of this.minions) {
+      const alpha = 0.72 * Math.min(1, m.timeLeft / 1.2) * (0.85 + 0.15 * Math.sin(now / 160 + m.x * 7));
+      this.actor(m, m, {
+        kind: 'spettro', color: SPECTRE_COLOR, facing: m.facing, scale: 0.95, alpha, flash: false,
+        pose: m.state === 'windup' ? 'windup' : m.state === 'strike' ? 'strike' : undefined,
+      });
+    }
+
     // Giocatore
     const dodging = player.state === 'dodge';
     const acting = player.state === 'attack' || player.state === 'skill';
-    const windupTime = player.state === 'skill' ? player.activeSkill?.windup ?? 0 : PLAYER.attack.windup;
+    const windupTime = player.state === 'skill' ? player.activeSkill?.windup ?? 0 : player.cls.attack.windup;
     this.actor(player, player, {
-      kind: 'hero',
-      color: 0x2f6fc8,
+      kind: player.cls.look.kind,
+      color: player.cls.look.color,
       facing: player.facing,
       scale: 1,
-      alpha: player.invulnerable ? 0.45 : 1,
+      alpha: player.invulnerable ? 0.45 : player.hidden ? 0.38 : 1,
       flash: player.hurtFlash > 0,
       pose:
         player.state === 'dead' ? 'dead'
@@ -878,6 +1093,11 @@ export class GameScene extends Phaser.Scene {
         }
         this.actor(e, e, { kind, color: e.def.color, facing: e.facing, scale: e.def.scale, alpha: fade, flash: false, pose: 'dead' });
         continue;
+      }
+      if (this.poisons.has(e)) {
+        const c = toScreen(e.x, e.y);
+        fx.lineStyle(2, 0x8fe060, 0.45 + 0.25 * Math.sin(now / 140));
+        fx.strokeEllipse(c.x, c.y, 34 * e.def.scale, 17 * e.def.scale);
       }
       const winding = e.state === 'windup' || e.state === 'transition';
       this.actor(e, e, {

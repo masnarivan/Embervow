@@ -5,8 +5,7 @@ import { moveWithCollision, type GameMap } from '../core/map';
 import { WARRIOR, type ClassDef, type Stats } from '../data/classes';
 import { ITEMS, KEY_ITEMS, RESPEC_ITEM, type Slot } from '../data/items';
 import { PLAYER } from '../data/player';
-import { SKILLS, type BuffStat, type SkillDef } from '../data/skills';
-import { TALENTS, TALENT_CONFIG } from '../data/talents';
+import { SKILLS, type BuffStat, type PoisonSpec, type SkillDef } from '../data/skills';
 import { applyXp, statsForLevel, xpToNext } from '../progression/leveling';
 import { Cooldowns } from '../skills/cooldowns';
 import { NO_MODS, SkillTree, combineMods, type LearnCheck, type Modifiers } from '../skills/tree';
@@ -20,6 +19,15 @@ export interface PlayerSave {
   equipped: Record<Slot, string | null>;
   /** Assente nei salvataggi più vecchi. */
   keyItems?: string[];
+  /** Id della classe; assente nei salvataggi più vecchi (Guerriero). */
+  cls?: string;
+}
+
+/** Richiesta di evocazione emessa da una skill: la scena crea gli alleati. */
+export interface SummonRequest {
+  count: number;
+  duration: number;
+  damageMult: number;
 }
 
 export type PlayerState = 'idle' | 'attack' | 'skill' | 'dodge' | 'stagger' | 'dead';
@@ -63,7 +71,11 @@ interface ArcSpec {
   showFor: number;
   breakPoise?: boolean;
   lifesteal?: number;
+  poison?: PoisonSpec;
 }
+
+/** Durata del veleno applicato dai talenti passivi (secondi). */
+const PASSIVE_POISON_TIME = 4;
 
 /** Vita a cui riporta "Ultima Luce" (frazione della massima). */
 const LAST_STAND_HP = 0.3;
@@ -111,12 +123,14 @@ export class Player {
   private lastStandUsed = false;
   private lastStandFired = false;
   private healShown = 0;
+  private summons: SummonRequest[] = [];
 
   constructor(x: number, y: number, cls: ClassDef = WARRIOR) {
     this.x = x;
     this.y = y;
     this.cls = cls;
-    this.tree = new SkillTree(TALENTS, this.alignment, TALENT_CONFIG);
+    this.tree = new SkillTree(cls.talents, this.alignment, cls.talentConfig);
+    this.rage = cls.rage.startFull ? cls.rage.max : 0;
     this.skills = cls.skills.map((id) => SKILLS[id]);
     this.stats = statsForLevel(cls, 1);
     this.hp = this.maxHp;
@@ -152,7 +166,12 @@ export class Player {
   }
 
   get buffed(): boolean {
-    return this.buffs.length > 0;
+    return this.buffs.some((b) => b.stat !== 'stealth');
+  }
+
+  /** Furtivo: i nemici non lo vedono finché non colpisce o viene ferito. */
+  get hidden(): boolean {
+    return this.state !== 'dead' && this.buffs.some((b) => b.stat === 'stealth');
   }
 
   private buffMult(stat: BuffStat): number {
@@ -270,6 +289,18 @@ export class Player {
     this.heal(damage * (this.mods.lifesteal + lifesteal));
   }
 
+  /** Da chiamare per ogni nemico ucciso. */
+  onKill(): void {
+    this.heal(this.maxHp * this.mods.killHeal);
+  }
+
+  /** Evocazioni richieste dall'ultima chiamata. */
+  takeSummons(): SummonRequest[] {
+    const s = this.summons;
+    this.summons = [];
+    return s;
+  }
+
   heal(amount: number): void {
     if (this.state === 'dead' || amount <= 0) return;
     const before = this.hp;
@@ -299,6 +330,12 @@ export class Player {
   // ---------- Stato ----------
 
   get invulnerable(): boolean {
+    const s = this.activeSkill;
+    if (this.state === 'skill' && s) {
+      // Traslazioni: intoccabile per tutta la fase di scatto.
+      const phasing = s.effects.some((fx) => fx.type === 'dash' && fx.phase);
+      return phasing && this.stateTime >= s.windup && this.stateTime < s.windup + s.active;
+    }
     return (
       this.state === 'dodge' &&
       this.stateTime >= PLAYER.dodge.iFrameStart &&
@@ -318,6 +355,7 @@ export class Player {
       inventory: [...this.inventory],
       equipped: { ...this.equipped },
       keyItems: [...this.keyItems],
+      cls: this.cls.id,
     };
   }
 
@@ -347,7 +385,8 @@ export class Player {
     this.state = 'idle';
     this.hp = this.maxHp;
     this.stamina.refill();
-    this.rage = 0;
+    this.rage = this.cls.rage.startFull ? this.maxRage : 0;
+    this.summons = [];
     this.buffs = [];
     this.cooldowns.clear();
     this.swing = null;
@@ -377,6 +416,7 @@ export class Player {
       this.hp = Math.round(this.maxHp * LAST_STAND_HP);
     }
     this.hurtFlash = 0.15;
+    this.buffs = this.buffs.filter((b) => b.stat !== 'stealth');
     this.dirX = Math.cos(fromAngle);
     this.dirY = Math.sin(fromAngle);
     this.buffered = null;
@@ -405,8 +445,10 @@ export class Player {
     this.buffs = this.buffs.filter((b) => (b.timeLeft -= dt) > 0);
     if (this.mods.hpRegen > 0) this.hp = Math.min(this.maxHp, this.hp + this.mods.hpRegen * dt);
     this.sinceCombat += dt;
-    if (this.sinceCombat > this.cls.rage.decayDelay) {
-      this.rage = Math.max(0, this.rage - this.cls.rage.decayPerSec * dt);
+    const res = this.cls.rage;
+    if (res.regenPerSec) this.rage = Math.min(this.maxRage, this.rage + res.regenPerSec * this.mods.rageGainMult * dt);
+    if (res.decayPerSec > 0 && this.sinceCombat > res.decayDelay) {
+      this.rage = Math.max(0, this.rage - res.decayPerSec * dt);
     }
 
     this.stateTime += dt;
@@ -420,13 +462,13 @@ export class Player {
         break;
       }
       case 'attack': {
-        const a = PLAYER.attack;
+        const a = this.cls.attack;
         if (this.stateTime < a.windup + a.active) this.advance(map, a.lungeSpeed * dt);
         if (!this.startDone && this.stateTime >= a.windup) {
           this.startDone = true;
-          event = this.emitArc({
-            range: a.range, halfArc: a.halfArc, damageMult: 1, color: 0xf4ecd0, showFor: a.active,
-          });
+          event = a.projectile
+            ? this.emitBolt({ range: a.range, damageMult: 1, speed: a.projectile.speed, color: a.projectile.color })
+            : this.emitArc({ range: a.range, halfArc: a.halfArc, damageMult: 1, color: a.color, showFor: a.active });
         }
         if (this.stateTime >= a.windup + a.active + a.recovery) this.finishAction(input);
         break;
@@ -443,6 +485,7 @@ export class Player {
           for (const fx of s.effects) {
             if (fx.type === 'buff') this.buffs.push({ stat: fx.stat, mult: fx.mult, timeLeft: fx.duration });
             else if (fx.type === 'heal') this.heal(this.maxHp * fx.percent);
+            else if (fx.type === 'summon') this.summons.push({ count: fx.count, duration: fx.duration, damageMult: fx.damageMult });
           }
           event = this.emitSkillArc(s, 'start');
         } else if (!this.endDone && this.stateTime >= activeEnd) {
@@ -468,7 +511,30 @@ export class Player {
         break;
       }
     }
+    if (event) this.dress(event);
     return event;
+  }
+
+  /** Completa un colpo appena emesso: agguato dalla furtività, colpo alle spalle, veleno dei talenti. */
+  private dress(ev: AttackEvent): void {
+    const stealth = this.buffs.find((b) => b.stat === 'stealth');
+    if (stealth) {
+      ev.damage = Math.round(ev.damage * stealth.mult);
+      this.buffs = this.buffs.filter((b) => b.stat !== 'stealth');
+    }
+    const back = (this.cls.backstab ?? 0) + this.mods.backstab;
+    if (back > 0) ev.backstab = 1 + back;
+    if (this.mods.poison > 0) {
+      const extra = ev.damage * this.mods.poison;
+      ev.poison = {
+        damage: (ev.poison?.damage ?? 0) + extra,
+        duration: Math.max(ev.poison?.duration ?? 0, PASSIVE_POISON_TIME),
+      };
+    }
+  }
+
+  private poisonOf(p: PoisonSpec | undefined): AttackEvent['poison'] {
+    return p ? { damage: this.attackDamage * p.mult, duration: p.duration } : undefined;
   }
 
   private advance(map: GameMap, dist: number): void {
@@ -495,15 +561,39 @@ export class Player {
       damage: Math.round(this.attackDamage * a.damageMult),
       breakPoise: a.breakPoise,
       lifesteal: a.lifesteal,
+      poison: this.poisonOf(a.poison),
+    };
+  }
+
+  private emitBolt(b: {
+    range: number; damageMult: number; speed: number; color: number;
+    radius?: number; breakPoise?: boolean; lifesteal?: number; pierce?: boolean; explode?: number;
+    count?: number; spread?: number; poison?: PoisonSpec;
+  }): AttackEvent {
+    return {
+      x: this.x,
+      y: this.y,
+      angle: this.facing,
+      range: b.range,
+      halfArc: 0,
+      damage: Math.round(this.attackDamage * b.damageMult),
+      breakPoise: b.breakPoise,
+      lifesteal: b.lifesteal,
+      poison: this.poisonOf(b.poison),
+      projectile: {
+        speed: b.speed, radius: b.radius, pierce: b.pierce, explode: b.explode, color: b.color,
+        count: b.count, spread: b.spread,
+      },
     };
   }
 
   private emitSkillArc(s: SkillDef, at: 'start' | 'end'): AttackEvent | null {
     for (const fx of s.effects) {
+      if (fx.type === 'bolt' && fx.at === at) return this.emitBolt({ ...fx, color: s.color });
       if (fx.type === 'arc' && fx.at === at) {
         return this.emitArc({
           range: fx.range, halfArc: fx.halfArc, damageMult: fx.damageMult, color: s.color, showFor: s.active,
-          breakPoise: fx.breakPoise, lifesteal: fx.lifesteal,
+          breakPoise: fx.breakPoise, lifesteal: fx.lifesteal, poison: fx.poison,
         });
       }
     }
@@ -541,7 +631,7 @@ export class Player {
       return;
     }
 
-    let cost = action.kind === 'attack' ? PLAYER.attack.cost : PLAYER.dodge.cost;
+    let cost = action.kind === 'attack' ? this.cls.attack.cost : PLAYER.dodge.cost;
     if (action.kind === 'attack' && this.mods.freeAttackRage > 0 && this.rage >= this.mods.freeAttackRage) cost = 0;
     if (!this.stamina.trySpend(cost)) {
       this.noStaminaFlash = 0.3;

@@ -16,6 +16,12 @@ export interface Modifiers {
   cheatDeath: boolean;
   /** Soglia di rabbia oltre cui l'attacco base non costa stamina (0 = disattivo). */
   freeAttackRage: number;
+  /** Frazione della vita massima recuperata a ogni nemico ucciso. */
+  killHeal: number;
+  /** Bonus al moltiplicatore dei colpi alle spalle (si somma a quello della classe). */
+  backstab: number;
+  /** Frazione del danno di ogni colpo inflitta di nuovo come veleno, in 4 secondi. */
+  poison: number;
 }
 
 export const NO_MODS: Readonly<Modifiers> = {
@@ -28,6 +34,9 @@ export const NO_MODS: Readonly<Modifiers> = {
   berserk: 0,
   cheatDeath: false,
   freeAttackRage: 0,
+  killHeal: 0,
+  backstab: 0,
+  poison: 0,
 };
 
 export type Tier = 1 | 2 | 3;
@@ -157,6 +166,9 @@ export function combineMods(list: readonly Partial<Modifiers>[]): Modifiers {
     m.hpRegen += x.hpRegen ?? 0;
     m.lifesteal += x.lifesteal ?? 0;
     m.berserk += x.berserk ?? 0;
+    m.killHeal += x.killHeal ?? 0;
+    m.backstab += x.backstab ?? 0;
+    m.poison += x.poison ?? 0;
     m.cheatDeath ||= !!x.cheatDeath;
     if (x.freeAttackRage) {
       m.freeAttackRage = m.freeAttackRage ? Math.min(m.freeAttackRage, x.freeAttackRage) : x.freeAttackRage;

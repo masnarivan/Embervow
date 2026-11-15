@@ -1,9 +1,15 @@
 import Phaser from 'phaser';
 import { audio } from '../audio/audio';
+import { CLASSES, classById } from '../data/classes';
 import { loadGame, saveStore, type SaveData } from '../save/save';
+import { actorFrame } from '../render/sprites';
 import { BACKGROUND, drawFlame } from '../render/terrain';
 import { CONTROLS } from '../ui/controls';
-import { Embers, FONT, INK, PAINT, divider, emblazon, menuLabel } from '../ui/theme';
+import { Embers, FONT, INK, PAINT, box, divider, emblazon, menuLabel } from '../ui/theme';
+
+const CARD_W = 250;
+const CARD_H = 228;
+const CARD_GAP = 28;
 
 /** Dove i beta tester segnalano bug e impressioni. */
 const FEEDBACK_URL = 'https://github.com/masnarivan/Embervow/issues/new';
@@ -14,7 +20,7 @@ interface Entry {
   action: () => void;
 }
 
-/** Menu iniziale: continua, nuova partita, comandi, segnalazione bug. */
+/** Menu iniziale: continua, nuova partita (con scelta del personaggio), comandi, segnalazione bug. */
 export class TitleScene extends Phaser.Scene {
   private save: SaveData | null = null;
   private entries: Entry[] = [];
@@ -23,6 +29,10 @@ export class TitleScene extends Phaser.Scene {
   private info!: Phaser.GameObjects.Text;
   private controls!: Phaser.GameObjects.Container;
   private confirmNew = false;
+  /** Scelta del personaggio per una nuova partita. */
+  private picker!: Phaser.GameObjects.Container;
+  private pickerG!: Phaser.GameObjects.Graphics;
+  private pickIndex = 0;
   private fire!: Phaser.GameObjects.Graphics;
   private ready = false;
   private embers!: Embers;
@@ -36,6 +46,7 @@ export class TitleScene extends Phaser.Scene {
     this.index = 0;
     this.confirmNew = false;
     this.ready = false;
+    this.pickIndex = 0;
   }
 
   create(): void {
@@ -58,6 +69,7 @@ export class TitleScene extends Phaser.Scene {
     this.info = this.add
       .text(cx, height - 96, '', { fontFamily: FONT, fontSize: '13px', color: INK.dim, align: 'center' })
       .setOrigin(0.5)
+      .setWordWrapWidth(width - 40)
       .setShadow(0, 1, '#000000', 4, false, true);
 
     this.controls = this.add.container(cx, height * 0.62).setVisible(false);
@@ -71,6 +83,8 @@ export class TitleScene extends Phaser.Scene {
     });
     this.controls.y = height * 0.5 - (CONTROLS.length * 24) / 2;
 
+    this.buildPicker();
+
     this.input.keyboard!.on('keydown', this.onKey, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.input.keyboard!.off('keydown', this.onKey, this));
 
@@ -81,12 +95,96 @@ export class TitleScene extends Phaser.Scene {
     });
   }
 
+  /** Una scheda per classe: figura, nome, due righe e le due vie dei talenti. */
+  private buildPicker(): void {
+    const { width, height } = this.scale;
+    const total = CLASSES.length * CARD_W + (CLASSES.length - 1) * CARD_GAP;
+    const scale = Math.min(1, (width - 24) / total);
+    this.picker = this.add.container(width / 2, height * 0.5).setScale(scale).setVisible(false);
+    this.pickerG = this.add.graphics();
+    this.picker.add(this.pickerG);
+    this.picker.add(
+      this.add.text(0, -34, 'Scegli chi scende negli Inferi', { fontFamily: FONT, fontSize: '20px', color: INK.title }).setOrigin(0.5),
+    );
+    CLASSES.forEach((c, i) => {
+      const cx = -total / 2 + i * (CARD_W + CARD_GAP) + CARD_W / 2;
+      const f = actorFrame(this, { kind: c.look.kind, color: c.look.color, scale: 1, facing: Math.PI / 4, pose: 'idle' });
+      this.picker.add(this.add.image(cx, 84, f.key).setOrigin(0.5, f.originY).setScale(f.displayScale * 1.5));
+      const line = (y: number, s: string, size: number, color: string) =>
+        this.picker.add(
+          this.add
+            .text(cx, y, s, { fontFamily: FONT, fontSize: `${size}px`, color, align: 'center' })
+            .setOrigin(0.5, 0)
+            .setWordWrapWidth(CARD_W - 28),
+        );
+      line(102, c.name, 22, INK.gold);
+      line(132, c.blurb, 13, INK.text);
+      const b = c.talentConfig.branchNames;
+      line(186, `Luce: ${b.light}\nOscurità: ${b.dark}`, 12, INK.dim);
+    });
+  }
+
+  private drawPicker(): void {
+    const g = this.pickerG.clear();
+    const total = CLASSES.length * CARD_W + (CLASSES.length - 1) * CARD_GAP;
+    CLASSES.forEach((_, i) => {
+      const x = -total / 2 + i * (CARD_W + CARD_GAP);
+      const sel = i === this.pickIndex;
+      g.fillStyle(0x000000, 0.5);
+      g.fillRect(x - 4, -4, CARD_W + 8, CARD_H + 8);
+      box(g, x, 0, CARD_W, CARD_H, PAINT.night, sel ? PAINT.goldLit : PAINT.iron, 0.92);
+      if (sel) {
+        g.lineStyle(2, PAINT.goldLit, 1);
+        g.strokeRect(x - 5, -5, CARD_W + 10, CARD_H + 10);
+      }
+    });
+  }
+
+  private showPicker(show: boolean): void {
+    this.picker.setVisible(show);
+    this.texts.forEach((t) => t.setVisible(!show));
+    if (show) this.drawPicker();
+  }
+
+  private onPickerKey(e: KeyboardEvent): void {
+    const n = CLASSES.length;
+    switch (e.code) {
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        this.pickIndex = (this.pickIndex - 1 + n) % n;
+        audio.play('ui');
+        break;
+      case 'ArrowRight':
+      case 'ArrowDown':
+        this.pickIndex = (this.pickIndex + 1) % n;
+        audio.play('ui');
+        break;
+      case 'Enter':
+      case 'NumpadEnter':
+      case 'Space': {
+        const cls = CLASSES[this.pickIndex].id;
+        this.ready = false;
+        void saveStore()
+          .clear()
+          .catch(() => undefined)
+          .then(() => this.startGame(null, cls));
+        return;
+      }
+      case 'Escape':
+        this.confirmNew = false;
+        this.showPicker(false);
+        break;
+    }
+    if (this.picker.visible) this.drawPicker();
+    this.refresh();
+  }
+
   private buildMenu(): void {
     const { width, height } = this.scale;
     const s = this.save;
     this.entries = [
       {
-        label: s ? `Continua  ·  Liv. ${s.player.level}` : 'Continua',
+        label: s ? `Continua  ·  ${classById(s.player.cls).name} Liv. ${s.player.level}` : 'Continua',
         enabled: !!s,
         action: () => this.startGame(this.save),
       },
@@ -114,6 +212,7 @@ export class TitleScene extends Phaser.Scene {
       this.showControls(false);
       return;
     }
+    if (this.picker.visible) return this.onPickerKey(e);
     const n = this.entries.length;
     switch (e.code) {
       case 'ArrowUp':
@@ -145,15 +244,14 @@ export class TitleScene extends Phaser.Scene {
       audio.play('denied');
       return;
     }
-    void saveStore()
-      .clear()
-      .catch(() => undefined)
-      .then(() => this.startGame(null));
+    // Il salvataggio si cancella solo a personaggio scelto: fin lì si può tornare indietro.
+    audio.play('ui');
+    this.showPicker(true);
   }
 
-  private startGame(save: SaveData | null): void {
+  private startGame(save: SaveData | null, cls?: string): void {
     audio.play('rest');
-    this.scene.start('game', { save });
+    this.scene.start('game', { save, cls });
   }
 
   private openFeedback(): void {
@@ -173,6 +271,10 @@ export class TitleScene extends Phaser.Scene {
       t.setText(menuLabel(e.label, sel)).setColor(!e.enabled ? INK.faint : sel ? INK.gold : INK.text);
     });
     if (this.controls.visible) this.info.setText('Premi un tasto per tornare');
+    else if (this.picker.visible) {
+      const warn = this.save ? ' · Confermando, il salvataggio attuale viene cancellato' : '';
+      this.info.setText(`Sinistra e Destra per scegliere · Invio conferma · Esc torna indietro${warn}`).setColor(INK.dim);
+    }
     else if (this.confirmNew) this.info.setText('Una nuova partita cancella il salvataggio. Premi di nuovo Invio per confermare.').setColor(INK.danger);
     else {
       this.info

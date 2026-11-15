@@ -12,6 +12,16 @@ export interface Projectile {
   life: number;
   /** Già passato attraverso il giocatore durante una schivata. */
   dodged: boolean;
+  // Solo per i proiettili del giocatore:
+  pierce?: boolean;
+  explode?: number;
+  breakPoise?: boolean;
+  lifesteal?: number;
+  color?: number;
+  backstab?: number;
+  poison?: { damage: number; duration: number };
+  /** Bersagli già colpiti da un proiettile perforante. */
+  hit?: Set<object>;
 }
 
 /** Crea i proiettili di un colpo: uno nella direzione del colpo, o un anello di `count`. */
@@ -21,16 +31,25 @@ export function spawnProjectiles(ev: AttackEvent): Projectile[] {
   const count = spec.count ?? 1;
   const out: Projectile[] = [];
   for (let i = 0; i < count; i++) {
-    const a = ev.angle + (count > 1 ? (i * Math.PI * 2) / count : 0);
+    const a =
+      ev.angle +
+      (count <= 1 ? 0 : spec.spread ? (i / (count - 1) - 0.5) * spec.spread : (i * Math.PI * 2) / count);
     out.push({
       x: ev.x + Math.cos(a) * 0.4,
       y: ev.y + Math.sin(a) * 0.4,
       vx: Math.cos(a) * spec.speed,
       vy: Math.sin(a) * spec.speed,
       damage: ev.damage,
-      radius: 0.15,
+      radius: spec.radius ?? 0.15,
       life: ev.range / spec.speed,
       dodged: false,
+      pierce: spec.pierce,
+      explode: spec.explode,
+      breakPoise: ev.breakPoise,
+      lifesteal: ev.lifesteal,
+      color: spec.color,
+      backstab: ev.backstab,
+      poison: ev.poison,
     });
   }
   return out;

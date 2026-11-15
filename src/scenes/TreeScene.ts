@@ -2,7 +2,6 @@ import Phaser from 'phaser';
 import type { Side } from '../alignment/alignment';
 import { KEY_ITEMS, RESPEC_ITEM } from '../data/items';
 import { SKILLS, type SkillDef } from '../data/skills';
-import { TALENTS, TALENT_CONFIG } from '../data/talents';
 import type { Player } from '../entities/Player';
 import type { TalentNode } from '../skills/tree';
 import { FONT, INK, PAINT, backdrop, box, divider, emblazon, frame } from '../ui/theme';
@@ -48,8 +47,8 @@ function nodePos(n: TalentNode): { x: number; y: number } {
   };
 }
 
-function costText(s: SkillDef): string {
-  return s.cost.rage ? `${s.cost.rage} rabbia` : `${s.cost.stamina ?? 0} stamina`;
+function costText(s: SkillDef, resource: string): string {
+  return s.cost.rage ? `${s.cost.rage} ${resource.toLowerCase()}` : `${s.cost.stamina ?? 0} stamina`;
 }
 
 /** Schermata dell'albero dei talenti: si apre sopra il gioco, che resta in pausa. */
@@ -76,6 +75,7 @@ export class TreeScene extends Phaser.Scene {
     this.player = data.player;
     this.atBonfire = data.atBonfire;
     this.nodeTexts.clear();
+    this.grid = [];
     this.slotTexts = [];
   }
 
@@ -107,20 +107,20 @@ export class TreeScene extends Phaser.Scene {
 
     SIDES.forEach((side, b) => {
       const cx = b * (BRANCH_W + BRANCH_GAP) + BRANCH_W / 2;
-      text(cx, 120, `${TALENT_CONFIG.branchNames[side]} · via della ${TALENT_CONFIG.sideNames[side]}`, 19, COLORS[side].text)
+      text(cx, 120, `${this.player.tree.config.branchNames[side]} · via della ${this.player.tree.config.sideNames[side]}`, 19, COLORS[side].text)
         .setOrigin(0.5, 0);
       this.alignTexts[side] = text(cx, 148, '', 13, INK.dim).setOrigin(0.5, 0);
     });
 
     // Etichette dei livelli tra i due rami, con la soglia di punti guadagnati.
     for (let t = 0; t < 3; t++) {
-      const thr = TALENT_CONFIG.tierThreshold[(t + 1) as 1 | 2 | 3];
+      const thr = this.player.tree.config.tierThreshold[(t + 1) as 1 | 2 | 3];
       text(BRANCH_W + BRANCH_GAP / 2, TREE_TOP + t * (NODE_H + ROW_GAP) + NODE_H / 2, `${ROMAN[t]}\n≥ ${thr}`, 13, INK.dim)
         .setOrigin(0.5)
         .setAlign('center');
     }
 
-    for (const node of TALENTS) {
+    for (const node of this.player.tree.nodes) {
       const { x, y } = nodePos(node);
       const t = text(x + NODE_W / 2, y + NODE_H / 2, '', 12)
         .setOrigin(0.5)
@@ -177,7 +177,7 @@ export class TreeScene extends Phaser.Scene {
         if (import.meta.env.DEV) {
           const side: Side = e.code === 'KeyL' ? 'light' : 'dark';
           this.player.alignment.gain(side, 3);
-          this.say(`+3 ${TALENT_CONFIG.sideNames[side]} (debug)`, INK.dim);
+          this.say(`+3 ${this.player.tree.config.sideNames[side]} (debug)`, INK.dim);
           this.redraw();
         }
         return;
@@ -236,7 +236,7 @@ export class TreeScene extends Phaser.Scene {
     const g = this.g;
     const p = this.player;
     const tree = p.tree;
-    const cfg = TALENT_CONFIG;
+    const cfg = tree.config;
     g.clear();
 
     // Slot abilità attuali
@@ -256,7 +256,7 @@ export class TreeScene extends Phaser.Scene {
     }
 
     // Collegamenti ai prerequisiti
-    for (const n of TALENTS) {
+    for (const n of tree.nodes) {
       const to = nodePos(n);
       for (const r of n.requires) {
         const req = tree.node(r);
@@ -269,7 +269,7 @@ export class TreeScene extends Phaser.Scene {
     }
 
     // Nodi
-    for (const n of TALENTS) {
+    for (const n of tree.nodes) {
       const { x, y } = nodePos(n);
       const c = COLORS[n.branch];
       const learned = tree.isLearned(n.id);
@@ -302,7 +302,7 @@ export class TreeScene extends Phaser.Scene {
     if (n.replaces) {
       const s = SKILLS[n.replaces.skill];
       const base = SKILLS[p.cls.skills[n.replaces.slot]];
-      lines.push(`Attiva · sostituisce ${base.name} sul tasto ${n.replaces.slot + 1} · ${costText(s)} · ricarica ${s.cooldown} s`);
+      lines.push(`Attiva · sostituisce ${base.name} sul tasto ${n.replaces.slot + 1} · ${costText(s, p.cls.rage.name)} · ricarica ${s.cooldown} s`);
     } else {
       lines.push('Passiva · sempre attiva');
     }

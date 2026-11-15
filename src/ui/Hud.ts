@@ -6,7 +6,7 @@ const FONT = { fontFamily: FACE, color: INK.text };
 const SLOT = 58;
 const GAP = 8;
 
-/** HUD fisso a schermo: vita, stamina, rabbia, livello, barra abilità, schermata di morte. */
+/** HUD fisso a schermo: vita, stamina, risorsa di classe (rabbia o mana), livello, barra abilità, schermata di morte. */
 export class Hud {
   private g: Phaser.GameObjects.Graphics;
   private hint: Phaser.GameObjects.Text;
@@ -68,7 +68,7 @@ export class Hud {
     // Barre in alto a sinistra
     this.bar(20, 20, 280, 16, player.hp / player.maxHp, 0xb82418);
     this.bar(20, 43, 230, 10, player.stamina.current / player.stamina.max, player.noStaminaFlash > 0 ? 0xe0c040 : 0x3f9a4a);
-    this.bar(20, 60, 180, 8, player.rage / player.maxRage, player.noRageFlash > 0 ? 0xffffff : 0xd0702a);
+    this.bar(20, 60, 180, 8, player.rage / player.maxRage, player.noRageFlash > 0 ? 0xffffff : player.cls.rage.color);
     this.bar(20, 76, 180, 4, player.xp / player.xpToNext, 0x8fe0c0);
     this.level
       .setPosition(214, 62)
@@ -97,9 +97,9 @@ export class Hud {
         g.fillStyle(0x000000, 0.6);
         g.fillRect(x + 3, y0 + 3, SLOT - 6, (SLOT - 6) * (cd / s.cooldown));
       }
-      // Rombo del costo: arancione = rabbia, verde = stamina
+      // Rombo del costo: colore della risorsa di classe (rabbia o mana), oppure verde = stamina
       diamond(g, x + SLOT - 9, y0 + 10, 5, 0x000000, 0.7);
-      diamond(g, x + SLOT - 9, y0 + 10, 3.5, s.cost.rage ? 0xe07a2a : 0x4fae5a);
+      diamond(g, x + SLOT - 9, y0 + 10, 3.5, s.cost.rage ? player.cls.rage.color : 0x4fae5a);
 
       this.slotKey[i].setPosition(x + 6, y0 + 4).setText(`${i + 1}`);
       this.slotName[i].setPosition(x + SLOT / 2, y0 + SLOT - 5).setText(s.name).setAlpha(cd > 0 ? 0.4 : 1);
